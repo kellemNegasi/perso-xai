@@ -1,0 +1,26 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+
+# Jupyter notebooks
+.ipynb_checkpoints/
+.notebooks_cache/
+*.nbconvert.ipynb
+
+# macOS & system files
+.DS_Store
+Thumbs.db
+
+# Logs / temporary
+*.log
+*.tmp
+*.bak
+*.swp
+*.swo

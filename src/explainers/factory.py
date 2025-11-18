@@ -1,10 +1,13 @@
 from __future__ import annotations
 from typing import Any, Dict
 from .shap_explainer import SHAPExplainer
+from .lime_explainer import LIMEExplainer
 
 _NAME2CLS = {
     "shap": SHAPExplainer,
+    "lime": LIMEExplainer,
 }
+
 
 def make_explainer(config: Dict[str, Any], model: Any, dataset: Any):
     typ = (config.get("type") or "shap").lower()

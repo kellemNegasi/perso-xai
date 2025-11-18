@@ -46,6 +46,58 @@ class TabularDataset:
 
         return cls(X_train, y_train, X_test, y_test, feature_names)
 
+    @classmethod
+    def from_synthetic(
+        cls,
+        *,
+        n_samples: int = 400,
+        n_features: int = 8,
+        test_size: float = 0.25,
+        random_state: Optional[int] = None,
+        task: str = "classification",
+        noise: float = 0.1,
+    ):
+        """
+        Generate a simple synthetic tabular dataset for quick experiments.
+
+        Args:
+            n_samples: Total number of samples (train + test).
+            n_features: Number of features.
+            test_size: Fraction of samples reserved for testing.
+            random_state: RNG seed for reproducibility.
+            task: "classification" or "regression".
+            noise: Noise scale applied to the target.
+        """
+        n_samples = max(2, int(n_samples))
+        n_features = max(1, int(n_features))
+        test_size = float(test_size)
+        n_test = max(1, int(round(n_samples * test_size)))
+        n_train = max(1, n_samples - n_test)
+
+        rng = np.random.default_rng(random_state)
+        X = rng.normal(size=(n_samples, n_features))
+        weights = rng.normal(size=n_features)
+        linear = X @ weights
+
+        if task == "classification":
+            logits = linear + noise * rng.normal(size=linear.shape)
+            probs = 1.0 / (1.0 + np.exp(-logits))
+            y = (probs > 0.5).astype(int)
+        else:
+            y = linear + noise * rng.normal(size=linear.shape)
+
+        order = rng.permutation(n_samples)
+        X = X[order]
+        y = y[order]
+
+        X_train = X[:n_train]
+        X_test = X[n_train:]
+        y_train = y[:n_train]
+        y_test = y[n_train:]
+
+        feature_names = [f"feature_{i}" for i in range(n_features)]
+        return cls(X_train, y_train, X_test, y_test, feature_names)
+
 
 def _to_numpy_2d(X):
     if _HAS_PANDAS:

@@ -3,11 +3,12 @@ from typing import Any, Dict
 from .shap_explainer import SHAPExplainer
 from .lime_explainer import LIMEExplainer
 from .integrated_gradients_explainer import IntegratedGradientsExplainer
-
+from .causal_shap_explainer import CausalSHAPExplainer
 _NAME2CLS = {
     "shap": SHAPExplainer,
     "lime": LIMEExplainer,
     "integrated_gradients": IntegratedGradientsExplainer,
+    "causal_shap": CausalSHAPExplainer,
 }
 
 

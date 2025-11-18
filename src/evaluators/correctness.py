@@ -1,15 +1,15 @@
 """
-Correctness metric for local tabular explanations.
+Correctness (faithfulness) metric for local tabular explanations.
 
-The metric is tailored to feature-attribution methods (SHAP/LIME/IG/Causal SHAP)
-that return predictions, true labels, and per-feature importance values in the
-BaseExplainer output schema.
+Implements a feature-removal test: the more the model prediction changes after
+masking the most important features (according to the explanation), the more
+"correct" the explanation is with respect to the black-box.
 """
 
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, Iterable, List, Sequence
+from typing import Any, Dict, List, Optional, Sequence
 
 import numpy as np
 
@@ -25,32 +25,51 @@ _FEATURE_METHOD_KEYS = {
 
 
 class CorrectnessEvaluator:
-    """Computes a scalar correctness score for local tabular explanations."""
+    """
+    Computes a correctness score via a feature-removal test.
 
-    def __init__(self, *, prediction_weight: float = 0.7) -> None:
-        """
-        Args:
-            prediction_weight: Importance given to model prediction accuracy when
-                combining with explanation informativeness. Remaining weight is
-                assigned to the informativeness component.
-        """
-        self.prediction_weight = float(prediction_weight)
+    Parameters
+    ----------
+    removal_fraction : float
+        Fraction of top-ranked features (by absolute importance) to mask.
+    default_baseline : float
+        Value used to replace masked features when no baseline vector is provided
+        in the explanation metadata (via ``baseline_instance``).
+    min_features : int
+        Minimum number of features to mask, regardless of ``removal_fraction``.
+    """
+
+    def __init__(
+        self,
+        *,
+        removal_fraction: float = 0.1,
+        default_baseline: float = 0.0,
+        min_features: int = 1,
+    ) -> None:
+        self.removal_fraction = float(np.clip(removal_fraction, 0.0, 1.0))
+        self.default_baseline = float(default_baseline)
+        self.min_features = max(1, int(min_features))
         self.logger = logging.getLogger(__name__)
 
-    # ------------------------------------------------------------------ #
-    # Public API
-    # ------------------------------------------------------------------ #
-
-    def evaluate(self, explanation_results: Dict[str, Any]) -> Dict[str, float]:
+    def evaluate(
+        self,
+        model: Any,
+        explanation_results: Dict[str, Any],
+    ) -> Dict[str, float]:
         """
         Evaluate correctness for SHAP/LIME/IG/Causal SHAP explanations.
 
-        Args:
-            explanation_results: Output dict from BaseExplainer.explain_dataset.
+        Parameters
+        ----------
+        model : Any
+            Trained model that produced the explanations (must expose ``predict``).
+        explanation_results : Dict[str, Any]
+            Output dict from ``BaseExplainer.explain_dataset``.
 
-        Returns:
-            {"correctness": score in [0, 1]} – returns 0.0 if the method or
-            payload is incompatible with this metric.
+        Returns
+        -------
+        Dict[str, float]
+            {"correctness": score in [0, 1]} – returns 0.0 if inputs are incompatible.
         """
         method = (explanation_results.get("method") or "").lower()
         if method not in _FEATURE_METHOD_KEYS:
@@ -66,7 +85,7 @@ class CorrectnessEvaluator:
 
         scores: List[float] = []
         for explanation in explanations:
-            score = self._per_instance_score(explanation)
+            score = self._feature_removal_score(model, explanation)
             if score is not None:
                 scores.append(score)
 
@@ -77,64 +96,89 @@ class CorrectnessEvaluator:
     # Internal helpers
     # ------------------------------------------------------------------ #
 
-    def _per_instance_score(self, explanation: Dict[str, Any]) -> float | None:
-        """Combine prediction correctness and importance informativeness."""
-        prediction = explanation.get("prediction")
-        true_label = explanation.get("true_label")
-        importances = explanation.get("feature_importance")
-
-        if prediction is None or true_label is None or importances is None:
-            return None
-
-        importance_vec = self._importance_to_array(importances)
+    def _feature_removal_score(self, model: Any, explanation: Dict[str, Any]) -> Optional[float]:
+        importance_vec = self._importance_to_array(explanation.get("feature_importance"))
         if importance_vec is None or importance_vec.size == 0:
             return None
 
-        pred_correctness = 1.0 if self._prediction_matches(prediction, true_label) else 0.0
-        informativeness = self._importance_informativeness(importance_vec)
+        instance = self._extract_instance(explanation)
+        if instance is None:
+            return None
 
-        weight = self.prediction_weight
-        return weight * pred_correctness + (1.0 - weight) * informativeness
+        baseline = self._baseline_vector(explanation, instance)
+        k = max(self.min_features, int(np.ceil(self.removal_fraction * len(importance_vec))))
+        k = min(k, len(importance_vec))
+        top_indices = np.argsort(-np.abs(importance_vec))[:k]
 
-    def _importance_to_array(self, importances: Any) -> np.ndarray | None:
-        """Convert feature importance into a 1-D numpy array."""
-        if isinstance(importances, np.ndarray):
-            if importances.ndim == 1:
-                return importances.astype(float)
-            if importances.ndim > 1:
-                return importances.reshape(-1).astype(float)
-            return importances.astype(float)
+        perturbed = instance.copy()
+        perturbed[top_indices] = baseline[top_indices]
 
-        if isinstance(importances, Sequence):
-            arr = np.asarray(importances, dtype=float)
-            if arr.ndim == 1:
-                return arr
-            if arr.ndim > 1:
-                return arr.reshape(-1)
-        return None
+        orig_pred = self._prediction_value(explanation.get("prediction"))
+        if orig_pred is None:
+            return None
 
-    def _prediction_matches(self, prediction: Any, true_label: Any) -> bool:
-        """Gracefully compare model prediction and true label."""
         try:
-            pred_scalar = float(np.asarray(prediction).ravel()[0])
-            true_scalar = float(np.asarray(true_label).ravel()[0])
-            return abs(pred_scalar - true_scalar) < 0.5
+            new_pred = self._model_prediction(model, perturbed)
+        except Exception as exc:
+            self.logger.debug("CorrectnessEvaluator failed to perturb instance: %s", exc)
+            return None
+
+        change = abs(orig_pred - new_pred)
+        denom = abs(orig_pred) + 1e-8
+        return float(np.clip(change / denom, 0.0, 1.0))
+
+    def _importance_to_array(self, importances: Any) -> Optional[np.ndarray]:
+        if importances is None:
+            return None
+        if isinstance(importances, np.ndarray):
+            vec = importances
+        elif isinstance(importances, Sequence):
+            vec = np.asarray(importances)
+        else:
+            return None
+        if vec.ndim == 0:
+            vec = vec.reshape(1)
+        elif vec.ndim > 1:
+            vec = vec.reshape(-1)
+        return vec.astype(float)
+
+    def _extract_instance(self, explanation: Dict[str, Any]) -> Optional[np.ndarray]:
+        candidate = (
+            explanation.get("instance")
+            or (explanation.get("metadata") or {}).get("instance")
+            or explanation.get("input")
+        )
+        if candidate is None:
+            return None
+        arr = np.asarray(candidate, dtype=float).reshape(-1)
+        return arr.copy()
+
+    def _baseline_vector(self, explanation: Dict[str, Any], instance: np.ndarray) -> np.ndarray:
+        metadata = explanation.get("metadata") or {}
+        baseline = metadata.get("baseline_instance")
+        if baseline is not None:
+            base_arr = np.asarray(baseline, dtype=float).reshape(-1)
+            if base_arr.shape == instance.shape:
+                return base_arr
+        return np.full_like(instance, self.default_baseline, dtype=float)
+
+    def _prediction_value(self, prediction: Any) -> Optional[float]:
+        if prediction is None:
+            return None
+        arr = np.asarray(prediction).ravel()
+        if arr.size == 0:
+            return None
+        try:
+            return float(arr[0])
         except Exception:
-            return prediction == true_label
+            return None
 
-    def _importance_informativeness(self, importance_vec: np.ndarray) -> float:
-        """
-        Estimate informativeness via normalized variance of absolute importance.
-        Returns values in [0, 1]; high variance => concentrated attribution.
-        """
-        importance_abs = np.abs(importance_vec)
-        if importance_abs.size <= 1:
-            return 0.0
-        if not np.isfinite(importance_abs).all():
-            return 0.0
-
-        variance = float(np.var(importance_abs))
-        max_variance = float(np.var(np.concatenate(([1.0], np.zeros(importance_abs.size - 1)))))
-        if max_variance <= 0:
-            return 0.0
-        return float(np.clip(variance / max_variance, 0.0, 1.0))
+    def _model_prediction(self, model: Any, instance: np.ndarray) -> float:
+        if not hasattr(model, "predict"):
+            raise AttributeError("Model must expose a predict() method.")
+        batch = instance.reshape(1, -1)
+        preds = model.predict(batch)
+        preds_arr = np.asarray(preds).ravel()
+        if preds_arr.size == 0:
+            raise ValueError("Model.predict returned empty output.")
+        return float(preds_arr[0])

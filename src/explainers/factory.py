@@ -2,10 +2,12 @@ from __future__ import annotations
 from typing import Any, Dict
 from .shap_explainer import SHAPExplainer
 from .lime_explainer import LIMEExplainer
+from .integrated_gradients_explainer import IntegratedGradientsExplainer
 
 _NAME2CLS = {
     "shap": SHAPExplainer,
     "lime": LIMEExplainer,
+    "integrated_gradients": IntegratedGradientsExplainer,
 }
 
 

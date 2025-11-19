@@ -97,7 +97,7 @@ class CorrectnessEvaluator:
     # ------------------------------------------------------------------ #
 
     def _feature_removal_score(self, model: Any, explanation: Dict[str, Any]) -> Optional[float]:
-        importance_vec = self._importance_to_array(explanation.get("feature_importance"))
+        importance_vec = self._feature_importance_vector(explanation)
         if importance_vec is None or importance_vec.size == 0:
             return None
 
@@ -126,7 +126,23 @@ class CorrectnessEvaluator:
         change = abs(orig_pred - new_pred)
         denom = abs(orig_pred) + 1e-8
         return float(np.clip(change / denom, 0.0, 1.0))
+    
+    def _feature_importance_vector(self, explanation: Dict[str, Any]) -> Optional[np.ndarray]:
+        """
+        Extract feature-importance/attribution vector from a standardized explanation dict.
+        Looks in both the root of the explanation and inside metadata so we can support
+        multiple explainer schemas.
+        """
+        candidates = ("feature_importance", "feature_importances", "attributions", "importance")
+        metadata = explanation.get("metadata") or {}
 
+        for container in (explanation, metadata):
+            for key in candidates:
+                vec = container.get(key)
+                arr = self._importance_to_array(vec)
+                if arr is not None:
+                    return arr
+        return None
     def _importance_to_array(self, importances: Any) -> Optional[np.ndarray]:
         if importances is None:
             return None

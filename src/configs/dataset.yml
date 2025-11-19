@@ -1,0 +1,32 @@
+tabular_toy:
+  description: "Synthetic tabular dataset for smoke tests."
+  loader:
+    module: src.datasets.tabular
+    factory: TabularDataset.from_synthetic
+  params:
+    n_samples: 400
+    n_features: 8
+    test_size: 0.25
+    random_state: 42
+    task: classification
+    noise: 0.1
+
+uci_adult:
+  description: "Adult Income dataset (preprocessed)."
+  loader:
+    module: src.datasets.tabular
+    factory: TabularDataset.from_arrays
+  params:
+    source: data/uci_adult.parquet
+    target_column: income
+
+breast_cancer:
+  description: "sklearn.datasets.load_breast_cancer wrapped as TabularDataset."
+  loader:
+    module: sklearn.datasets
+    factory: load_breast_cancer
+  wrapper:
+    module: src.datasets.tabular
+    factory: TabularDataset.from_arrays
+  params:
+    as_frame: true

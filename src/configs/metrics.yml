@@ -1,0 +1,6 @@
+correctness:
+  module: src.evaluators.correctness
+  class: CorrectnessEvaluator
+  params:
+    removal_fraction: 0.1    # fraction of top features to mask
+    default_baseline: 0.0    # value used when no baseline vector is provided

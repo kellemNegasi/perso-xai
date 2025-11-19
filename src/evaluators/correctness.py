@@ -113,7 +113,7 @@ class CorrectnessEvaluator:
         perturbed = instance.copy()
         perturbed[top_indices] = baseline[top_indices]
 
-        orig_pred = self._prediction_value(explanation.get("prediction"))
+        orig_pred = self._prediction_value(explanation)
         if orig_pred is None:
             return None
 
@@ -178,7 +178,23 @@ class CorrectnessEvaluator:
                 return base_arr
         return np.full_like(instance, self.default_baseline, dtype=float)
 
-    def _prediction_value(self, prediction: Any) -> Optional[float]:
+    def _prediction_value(self, explanation: Dict[str, Any]) -> Optional[float]:
+        """
+        Scalar value to track under feature removal.
+        Prefer class probability if available; otherwise use the raw prediction.
+        """
+        proba = explanation.get("prediction_proba")
+        if proba is not None:
+            proba_arr = np.asarray(proba).ravel()
+            if proba_arr.size == 0:
+                return None
+            # Binary: use positive class (index 1)
+            if proba_arr.size == 2:
+                return float(proba_arr[1])
+            # Multiclass: use max probability
+            return float(proba_arr.max())
+
+        prediction = explanation.get("prediction")
         if prediction is None:
             return None
         arr = np.asarray(prediction).ravel()
@@ -189,12 +205,26 @@ class CorrectnessEvaluator:
         except Exception:
             return None
 
+
     def _model_prediction(self, model: Any, instance: np.ndarray) -> float:
+        """
+        Compute scalar prediction for a perturbed instance, aligned with _prediction_value:
+        prefer class probability if available; otherwise use raw prediction.
+        """
+        batch = instance.reshape(1, -1)
+        if hasattr(model, "predict_proba"):
+            proba = np.asarray(model.predict_proba(batch)).ravel()
+            if proba.size == 0:
+                raise ValueError("Model.predict_proba returned empty output.")
+            if proba.size == 2:
+                return float(proba[1])          # positive class for binary
+            return float(proba.max())           # max prob for multiclass
+
         if not hasattr(model, "predict"):
             raise AttributeError("Model must expose a predict() method.")
-        batch = instance.reshape(1, -1)
-        preds = model.predict(batch)
-        preds_arr = np.asarray(preds).ravel()
-        if preds_arr.size == 0:
+
+        preds = np.asarray(model.predict(batch)).ravel()
+        if preds.size == 0:
             raise ValueError("Model.predict returned empty output.")
-        return float(preds_arr[0])
+        return float(preds[0])
+

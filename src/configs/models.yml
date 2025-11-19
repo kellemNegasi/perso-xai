@@ -1,0 +1,23 @@
+random_forest:
+  description: "Baseline RandomForest for tabular regression/classification."
+  module: sklearn.ensemble
+  class: RandomForestClassifier
+  params:
+    n_estimators: 200
+    max_depth: null
+    random_state: 42
+  fit:
+    requires_scaler: false
+
+logistic_regression:
+  description: "Logistic regression with standard scaling."
+  module: sklearn.linear_model
+  class: LogisticRegression
+  params:
+    penalty: l2
+    C: 1.0
+    solver: lbfgs
+    max_iter: 200
+    random_state: 42
+  fit:
+    requires_scaler: true

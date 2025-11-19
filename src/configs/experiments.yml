@@ -1,0 +1,28 @@
+tabular_demo_suite:
+  dataset: tabular_toy
+  model: random_forest
+  explainers:
+    - shap_default
+    - lime_default
+  metrics:
+    - correctness
+
+breast_cancer_rf_suite:
+  dataset: breast_cancer
+  model: random_forest
+  explainers:
+    - shap_default
+    - causal_shap_default
+  metrics:
+    - correctness
+
+breast_cancer_lr_suite:
+  dataset: breast_cancer
+  model: logistic_regression
+  explainers:
+    - shap_default
+    - causal_shap_default
+    - lime_default
+    - integrated_gradients_default
+  metrics:
+    - correctness

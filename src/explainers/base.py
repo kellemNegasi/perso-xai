@@ -302,6 +302,7 @@ class BaseExplainer(ABC):
             "feature_names": feature_names,
             "metadata": metadata or {},
             "generation_time": per_instance_time,
+            "instance": np.asarray(instance).tolist(),
         }
 
     def _infer_feature_names(self, instance: InstanceLike) -> List[str]:

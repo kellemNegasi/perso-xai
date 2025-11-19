@@ -1,0 +1,35 @@
+shap_default:
+  type: shap
+  description: "Tree/Kernel SHAP with default background size."
+  params:
+    experiment:
+      explanation:
+        background_sample_size: 100
+
+lime_default:
+  type: lime
+  description: "LIME with 500 perturbations."
+  params:
+    experiment:
+      explanation:
+        lime_num_samples: 500
+        lime_noise_scale: 0.1
+        lime_kernel_width: 2.0
+
+integrated_gradients_default:
+  type: integrated_gradients
+  description: "Finite-difference IG."
+  params:
+    experiment:
+      explanation:
+        ig_steps: 100
+        ig_epsilon: 0.0001
+
+causal_shap_default:
+  type: causal_shap
+  description: "Causal SHAP with correlation threshold."
+  params:
+    experiment:
+      explanation:
+        causal_shap_corr_threshold: 0.3
+        causal_shap_coalitions: 50

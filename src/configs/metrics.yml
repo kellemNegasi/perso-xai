@@ -25,3 +25,10 @@ compactness_size:
   class: CompactnessEvaluator
   params:
     zero_tolerance: 1.0e-08
+
+covariate_complexity:
+  module: src.evaluators.covariate_complexity
+  class: CovariateComplexityEvaluator
+  params:
+    metric_key: covariate_complexity
+    regularity_key: covariate_regularity

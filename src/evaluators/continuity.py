@@ -2,7 +2,7 @@
 Continuity metric – stability for slight variations.
 
 Adapts the non-sensitivity test: apply a small perturbation to an instance,
-approximate the explanation for the perturbed sample, and measure similarity with
+recompute the explanation for the perturbed sample, and measure similarity with
 the original attribution vector.
 """
 
@@ -26,7 +26,7 @@ _FEATURE_METHOD_KEYS = {
 class ContinuityEvaluator:
     """
     Estimates explanation continuity by perturbing inputs slightly and checking whether
-    the resulting explanation remains similar (Section 6.4 stability check).
+    the resulting explanation remains similar.
     """
 
     def __init__(
@@ -37,6 +37,19 @@ class ContinuityEvaluator:
         metric_key: str = "continuity_stability",
         random_state: Optional[int] = 42,
     ) -> None:
+        """
+        Parameters
+        ----------
+        max_instances : int, optional
+            Maximum number of explanations to perturb per call (defaults to 5).
+        noise_scale : float, optional
+            Standard-deviation multiplier for the Gaussian noise added to each
+            instance; larger values stress continuity more aggressively.
+        metric_key : str, optional
+            Name of the metric emitted in the returned dictionary.
+        random_state : int | None, optional
+            Seed for the random number generator (None for stochastic runs).
+        """
         self.max_instances = max(1, int(max_instances))
         self.noise_scale = float(max(0.0, noise_scale))
         self.metric_key = metric_key or "continuity_stability"
@@ -48,7 +61,31 @@ class ContinuityEvaluator:
         model: Any,
         explanation_results: Dict[str, Any],
         dataset: Any | None = None,
+        explainer: Any | None = None,
     ) -> Dict[str, float]:
+        """
+        Perturb a few instances and measure how similar their explanations remain.
+
+        Parameters
+        ----------
+        model : Any
+            Present for API symmetry; the current continuity metric does not invoke it.
+        explanation_results : Dict[str, Any]
+            Output dict returned by ``BaseExplainer.explain_dataset`` containing
+            per-instance explanations with attribution vectors.
+        dataset : Any | None, optional
+            Dataset object providing `X_train`; used to estimate feature-wise standard
+            deviations so perturbations respect the data scale.
+        explainer : Any | None, optional
+            Fitted explainer instance exposing ``explain_instance`` so we can obtain
+            true attributions for perturbed samples.
+
+        Returns
+        -------
+        Dict[str, float]
+            A single-entry dictionary mapping ``metric_key`` to the average absolute
+            correlation between original and perturbed attributions.
+        """
         method = (explanation_results.get("method") or "").lower()
         if method not in _FEATURE_METHOD_KEYS:
             return {self.metric_key: 0.0}
@@ -74,9 +111,15 @@ class ContinuityEvaluator:
             noise = rng.normal(0.0, std_vec * self.noise_scale, size=instance.shape[0])
             perturbed_instance = instance + noise
 
-            perturbed_importance = self._approximate_perturbed_importance(
-                instance, perturbed_instance, importance
+            perturbed_importance = self._true_perturbed_importance(
+                explainer=explainer,
+                perturbed_instance=perturbed_instance,
             )
+            # If needed later we can re-enable the approximation fallback or to save time:
+            # if perturbed_importance is None:
+            #     perturbed_importance = self._approximate_perturbed_importance(
+            #         instance, perturbed_instance, importance
+            #     )
             if perturbed_importance is None or perturbed_importance.size != importance.size:
                 continue
 
@@ -92,6 +135,7 @@ class ContinuityEvaluator:
     # ------------------------------------------------------------------ #
 
     def _dataset_feature_std(self, dataset: Any | None, example_explanation: Dict[str, Any]) -> Optional[np.ndarray]:
+        """Return flattened feature standard deviations derived from the dataset."""
         if dataset is None:
             return None
         X_train = getattr(dataset, "X_train", None)
@@ -109,6 +153,7 @@ class ContinuityEvaluator:
         return None
 
     def _match_std_vector(self, feature_std: Optional[np.ndarray], n_features: int) -> np.ndarray:
+        """Resize or broadcast the std vector so it matches the instance dimension."""
         if feature_std is None:
             return np.ones(n_features, dtype=float)
         std_vec = np.asarray(feature_std, dtype=float).reshape(-1)
@@ -119,6 +164,7 @@ class ContinuityEvaluator:
         return std_vec
 
     def _instance_vector(self, explanation: Dict[str, Any]) -> Optional[np.ndarray]:
+        """Extract the instance represented by an explanation as a 1-D numpy vector."""
         candidate = (
             explanation.get("instance")
             or (explanation.get("metadata") or {}).get("instance")
@@ -130,6 +176,7 @@ class ContinuityEvaluator:
         return arr.copy()
 
     def _importance_vector(self, explanation: Dict[str, Any]) -> Optional[np.ndarray]:
+        """Return the attribution vector from either the explanation or metadata."""
         candidates = ("feature_importance", "feature_importances", "attributions", "importance")
         metadata = explanation.get("metadata") or {}
         for container in (explanation, metadata):
@@ -141,6 +188,7 @@ class ContinuityEvaluator:
         return None
 
     def _to_array(self, values: Any) -> Optional[np.ndarray]:
+        """Convert a list/sequence into a flattened float numpy array."""
         if values is None:
             return None
         if isinstance(values, np.ndarray):
@@ -155,20 +203,51 @@ class ContinuityEvaluator:
             arr = arr.reshape(-1)
         return arr.astype(float)
 
+    def _true_perturbed_importance(
+        self,
+        explainer: Any | None,
+        perturbed_instance: np.ndarray,
+    ) -> Optional[np.ndarray]:
+        """
+        Re-run the explainer on the perturbed instance (if available) to obtain the
+        actual attribution vector used in the continuity comparison.
+        """
+        if explainer is None or not hasattr(explainer, "explain_instance"):
+            return None
+
+        try:
+            perturbed_expl = explainer.explain_instance(perturbed_instance)
+        except Exception as exc:
+            self.logger.debug(
+                "ContinuityEvaluator failed to re-explain perturbed instance: %s", exc
+            )
+            return None
+        return self._importance_vector(perturbed_expl)
+
     def _approximate_perturbed_importance(
         self,
         original_instance: np.ndarray,
         perturbed_instance: np.ndarray,
         original_importance: np.ndarray,
     ) -> Optional[np.ndarray]:
+        """Scale the original importance vector according to relative input changes."""
         if original_instance.shape != perturbed_instance.shape:
             return None
-
+        
+        # TODO: Replace this heuristic with a true re-run of the explainer on the perturbed
+        # instance so continuity reflects the actual attribution change instead of the
+        # assumed proportional scaling below:
+        #   Δx_i = x'_i - x_i
+        #   change_magnitude_i = |Δx_i| / (|x_i| + 1e-8)
+        #   perturbed_importance_i = original_importance_i * (1 + 0.1 * change_magnitude_i)
+        # The 0.1 factor was inherited from the prototype code — revisit whether that
+        # damping constant still makes sense once we compute real perturbation scores.
         input_change = perturbed_instance - original_instance
         change_magnitude = np.abs(input_change) / (np.abs(original_instance) + 1e-8)
         return original_importance * (1.0 + 0.1 * change_magnitude)
 
     def _similarity(self, vec_a: np.ndarray, vec_b: np.ndarray) -> Optional[float]:
+        """Compute Pearson correlation between two attribution vectors if defined."""
         if vec_a.size < 2 or vec_b.size < 2:
             return None
         std_a = float(np.std(vec_a))

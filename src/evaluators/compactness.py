@@ -1,0 +1,166 @@
+# src/evaluators/compactness.py
+"""
+Compactness metrics for local feature-attribution explanations.
+
+Focuses on the Size family from Co-12 Section 6.7:
+    • Sparsity (fraction of near-zero attributions)
+    • Top-k coverage (importance mass captured by top 5 / top 10 features)
+    • Effective feature count (inverse participation ratio, normalized)
+"""
+
+from __future__ import annotations
+
+import logging
+from typing import Any, Dict, List, Optional, Sequence
+
+import numpy as np
+
+_FEATURE_METHOD_KEYS = {
+    "shap",
+    "lime",
+    "integrated_gradients",
+    "integratedgradients",
+    "causal_shap",
+    "causalshap",
+}
+
+
+class CompactnessEvaluator:
+    """Aggregates Size-style compactness indicators for feature attributions."""
+
+    def __init__(self, *, zero_tolerance: float = 1e-8) -> None:
+        """Store the magnitude threshold that defines a "near-zero" attribution."""
+        self.zero_tolerance = max(0.0, float(zero_tolerance))
+        self.logger = logging.getLogger(__name__)
+
+    def evaluate(
+        self,
+        model: Any,  # unused, kept for API symmetry
+        explanation_results: Dict[str, Any],
+        dataset: Any | None = None,   # unused placeholder
+        explainer: Any | None = None, # unused placeholder
+    ) -> Dict[str, float]:
+        """Return averaged compactness metrics for a batch of explanations."""
+        method = (explanation_results.get("method") or "").lower()
+        # input gating, make sure we only process supported methods
+        if method not in _FEATURE_METHOD_KEYS:
+            return self._empty_result()
+
+        explanations = explanation_results.get("explanations") or []
+        if not explanations:
+            return self._empty_result()
+
+        accumulators = {
+            "compactness_sparsity": [],
+            "compactness_top5_coverage": [],
+            "compactness_top10_coverage": [],
+            "compactness_effective_features": [],
+        }
+
+        for explanation in explanations:
+            importance = self._importance_vector(explanation)
+            if importance is None:
+                continue
+
+            metrics = self._feature_compactness(importance)
+            if metrics is None:
+                continue
+            for key, value in metrics.items():
+                accumulators[key].append(value)
+
+        return {
+            key: float(np.mean(values)) if values else 0.0
+            for key, values in accumulators.items()
+        }
+
+    # ------------------------------------------------------------------ #
+    # Helpers                                                            #
+    # ------------------------------------------------------------------ #
+
+    def _empty_result(self) -> Dict[str, float]:
+        """Convenience helper that returns zeros for all compactness metrics."""
+        return {
+            "compactness_sparsity": 0.0,
+            "compactness_top5_coverage": 0.0,
+            "compactness_top10_coverage": 0.0,
+            "compactness_effective_features": 0.0,
+        }
+
+    def _importance_vector(self, explanation: Dict[str, Any]) -> Optional[np.ndarray]:
+        """Extract the attribution vector from an explanation dict or metadata."""
+        candidates = ("feature_importance", "feature_importances", "attributions", "importance")
+        metadata = explanation.get("metadata") or {}
+
+        for container in (explanation, metadata):
+            for key in candidates:
+                vec = container.get(key)
+                arr = self._to_array(vec)
+                if arr is not None:
+                    return arr
+        self.logger.debug("CompactnessEvaluator missing importance vector in explanation")
+        return None
+
+    def _to_array(self, values: Any) -> Optional[np.ndarray]:
+        """Coerce numpy arrays or sequences into a flattened float vector."""
+        if values is None:
+            return None
+        if isinstance(values, np.ndarray):
+            arr = values
+        elif isinstance(values, Sequence):
+            arr = np.asarray(values)
+        else:
+            return None
+        if arr.ndim == 0:
+            arr = arr.reshape(1)
+        elif arr.ndim > 1:
+            arr = arr.reshape(-1)
+        return arr.astype(float)
+
+    def _feature_compactness(self, importance: np.ndarray) -> Optional[Dict[str, float]]:
+        """Compute per-instance sparsity, coverage, and effective-feature scores."""
+        if importance.size == 0:
+            return None
+
+        imp = np.abs(importance)
+        if np.any(np.isnan(imp)) or np.any(np.isinf(imp)):
+            return None
+
+        n_features = imp.size
+        total = float(np.sum(imp))
+        tol = self.zero_tolerance
+
+        non_zero = np.count_nonzero(imp > tol)
+        # Sparsity: fraction of features whose magnitude is below the tolerance.
+        sparsity = 1.0 - (non_zero / n_features)
+        sparsity = float(np.clip(sparsity, 0.0, 1.0))
+
+        if total <= 0.0:
+            top5 = 0.0
+            top10 = 0.0
+            effective = 0.0
+        else:
+            sorted_imp = np.sort(imp)[::-1]
+            normalized = sorted_imp / total
+            # Top-k coverage: proportion of attribution mass captured by the k largest
+            # features, indicating how concentrated the explanation is.
+            top5 = float(np.sum(normalized[: min(5, n_features)]))
+            top10 = float(np.sum(normalized[: min(10, n_features)]))
+
+            prob_dist = imp / total
+            participation = float(np.sum(prob_dist ** 2))
+            effective_count = 1.0 / participation if participation > 0.0 else float(n_features)
+
+            if n_features == 1:
+                effective = 1.0
+            else:
+                # Normalize IPO so 1.0 means "one dominant feature" and 0.0 indicates
+                # a uniform spread across all features.
+                effective = 1.0 - (effective_count - 1.0) / (n_features - 1.0)
+                effective = float(np.clip(effective, 0.0, 1.0))
+
+        return {
+            "compactness_sparsity": sparsity,
+            "compactness_top5_coverage": top5,
+            "compactness_top10_coverage": top10,
+            "compactness_effective_features": effective,
+        }

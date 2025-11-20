@@ -32,7 +32,7 @@ The current correctness metric follows the deletion check from “From Anecdotal
 ### 3. CONSISTENCY
 
 ### 4. CONTINUITY
-Continuity currently reuses the stability-for-slight-variations test (Co-12 Section 6.4). For a handful of instances we apply a tiny Gaussian perturbation to the feature vector (noise is scaled by training-set standard deviation when available), approximate the attribution on the perturbed instance, and compute the absolute correlation between the perturbed and original attribution vectors. Averaging those correlations yields the `continuity_stability` score—values close to 1 indicate explanations remain smooth under small input changes. Config knobs: `max_instances` (how many explanations to perturb), `noise_scale` (perturbation magnitude), and `random_state`.
+Continuity currently reuses the stability-for-slight-variations test (Co-12 Section 6.4). For a handful of instances we apply a tiny Gaussian perturbation to the feature vector (noise is scaled by training-set standard deviation when available), re-run the explainer on the perturbed instance, and compute the absolute correlation between the perturbed and original attribution vectors. Averaging those correlations yields the `continuity_stability` score—values close to 1 indicate explanations remain smooth under small input changes. Config knobs: `max_instances` (how many explanations to perturb), `noise_scale` (perturbation magnitude), and `random_state`.
 
 ### 5. CONTRASTIVITY
 

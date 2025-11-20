@@ -48,6 +48,19 @@ class CorrectnessEvaluator:
         default_baseline: float = 0.0,
         min_features: int = 1,
     ) -> None:
+        """
+        Parameters
+        ----------
+        removal_fraction : float | int, optional
+            Fraction (or absolute count) of top-ranked features to mask when computing
+            the deletion score.
+        default_baseline : float, optional
+            Value substituted for masked features when an explanation does not provide
+            its own ``baseline_instance`` metadata.
+        min_features : int, optional
+            Enforce a minimum number of masked features even if ``removal_fraction``
+            would suggest fewer.
+        """
         if isinstance(removal_fraction, bool):
             # avoid treating booleans as integers; coerce to float fraction
             removal_fraction = float(removal_fraction)
@@ -69,6 +82,7 @@ class CorrectnessEvaluator:
         model: Any,
         explanation_results: Dict[str, Any],
         dataset: Any | None = None,  # dataset currently unused; accepted for API symmetry
+        explainer: Any | None = None,  # explainer unused; kept for interface parity
     ) -> Dict[str, float]:
         """
         Evaluate correctness for SHAP/LIME/IG/Causal SHAP explanations.
@@ -76,9 +90,15 @@ class CorrectnessEvaluator:
         Parameters
         ----------
         model : Any
-            Trained model that produced the explanations (must expose ``predict``).
+            Trained model that produced the explanations (must expose ``predict`` and
+            optionally ``predict_proba``).
         explanation_results : Dict[str, Any]
             Output dict from ``BaseExplainer.explain_dataset``.
+        dataset : Any | None, optional
+            Unused placeholder to keep the metric interface aligned with other
+            evaluators.
+        explainer : Any | None, optional
+            Unused placeholder included for interface parity with other metrics.
 
         Returns
         -------
@@ -111,6 +131,7 @@ class CorrectnessEvaluator:
     # ------------------------------------------------------------------ #
 
     def _feature_removal_score(self, model: Any, explanation: Dict[str, Any]) -> Optional[float]:
+        """Mask the most important features and return the resulting normalized drop."""
         importance_vec = self._feature_importance_vector(explanation)
         if importance_vec is None or importance_vec.size == 0:
             return None
@@ -138,7 +159,22 @@ class CorrectnessEvaluator:
 
         change = abs(orig_pred - new_pred)
         denom = abs(orig_pred) + 1e-8
-        return float(np.clip(change / denom, 0.0, 1.0))
+        if denom < 1e-12:
+            self.logger.debug(
+                "CorrectnessEvaluator denominator nearly zero (orig=%s); skipping instance",
+                orig_pred,
+            )
+            return None
+        score = float(np.clip(change / denom, 0.0, 1.0))
+        if np.isnan(score):
+            self.logger.debug(
+                "CorrectnessEvaluator produced NaN score (orig=%s, new=%s, denom=%s)",
+                orig_pred,
+                new_pred,
+                denom,
+            )
+            return None
+        return score
 
     def _num_features_to_mask(self, n_features: int) -> int:
         """
@@ -169,13 +205,16 @@ class CorrectnessEvaluator:
                     return arr
         return None
     def _importance_to_array(self, importances: Any) -> Optional[np.ndarray]:
+        """Coerce importance values into a 1-D float numpy array."""
         if importances is None:
+            self.logger.debug("CorrectnessEvaluator missing importance vector in explanation")
             return None
         if isinstance(importances, np.ndarray):
             vec = importances
         elif isinstance(importances, Sequence):
             vec = np.asarray(importances)
         else:
+            self.logger.debug("CorrectnessEvaluator missing instance vector in explanation")
             return None
         if vec.ndim == 0:
             vec = vec.reshape(1)
@@ -195,12 +234,16 @@ class CorrectnessEvaluator:
         return arr.copy()
 
     def _baseline_vector(self, explanation: Dict[str, Any], instance: np.ndarray) -> np.ndarray:
+        """Return explainer-provided baseline if present, otherwise fill with default."""
         metadata = explanation.get("metadata") or {}
         baseline = metadata.get("baseline_instance")
         if baseline is not None:
             base_arr = np.asarray(baseline, dtype=float).reshape(-1)
             if base_arr.shape == instance.shape:
                 return base_arr
+        self.logger.debug(
+            "CorrectnessEvaluator using default baseline %.5f for instance", self.default_baseline
+        )
         return np.full_like(instance, self.default_baseline, dtype=float)
 
     def _prediction_value(self, explanation: Dict[str, Any]) -> Optional[float]:
@@ -221,6 +264,7 @@ class CorrectnessEvaluator:
 
         prediction = explanation.get("prediction")
         if prediction is None:
+            self.logger.debug("CorrectnessEvaluator missing prediction value in explanation")
             return None
         arr = np.asarray(prediction).ravel()
         if arr.size == 0:

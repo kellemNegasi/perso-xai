@@ -39,7 +39,6 @@ class SHAPExplainer(BaseExplainer):
             self.logger.warning("`shap` not available; will use permutation fallback.")
             return
 
-        # self._shap.disable_progress_bar() # suppress SHAP output noise.
         X_np, _ = self._coerce_X_y(X, None)
         self._is_tree = self._is_tree_model()
 

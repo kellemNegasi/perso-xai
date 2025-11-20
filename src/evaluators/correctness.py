@@ -30,8 +30,10 @@ class CorrectnessEvaluator:
 
     Parameters
     ----------
-    removal_fraction : float
-        Fraction of top-ranked features (by absolute importance) to mask.
+    removal_fraction : float | int
+        Fraction of top-ranked features (by absolute importance) to mask when given
+        as a float in [0, 1]. If an integer is provided, it is interpreted as the
+        absolute number of top features to delete (use 1 for single-feature deletion).
     default_baseline : float
         Value used to replace masked features when no baseline vector is provided
         in the explanation metadata (via ``baseline_instance``).
@@ -46,7 +48,18 @@ class CorrectnessEvaluator:
         default_baseline: float = 0.0,
         min_features: int = 1,
     ) -> None:
-        self.removal_fraction = float(np.clip(removal_fraction, 0.0, 1.0))
+        if isinstance(removal_fraction, bool):
+            # avoid treating booleans as integers; coerce to float fraction
+            removal_fraction = float(removal_fraction)
+
+        if isinstance(removal_fraction, (int, np.integer)):
+            self._removal_mode = "count"
+            self._removal_count = max(1, int(removal_fraction))
+            self.removal_fraction = None
+        else:
+            self._removal_mode = "fraction"
+            self.removal_fraction = float(np.clip(float(removal_fraction), 0.0, 1.0))
+            self._removal_count = None
         self.default_baseline = float(default_baseline)
         self.min_features = max(1, int(min_features))
         self.logger = logging.getLogger(__name__)
@@ -106,8 +119,7 @@ class CorrectnessEvaluator:
             return None
 
         baseline = self._baseline_vector(explanation, instance)
-        k = max(self.min_features, int(np.ceil(self.removal_fraction * len(importance_vec))))
-        k = min(k, len(importance_vec))
+        k = self._num_features_to_mask(len(importance_vec))
         top_indices = np.argsort(-np.abs(importance_vec))[:k]
 
         perturbed = instance.copy()
@@ -126,6 +138,18 @@ class CorrectnessEvaluator:
         change = abs(orig_pred - new_pred)
         denom = abs(orig_pred) + 1e-8
         return float(np.clip(change / denom, 0.0, 1.0))
+
+    def _num_features_to_mask(self, n_features: int) -> int:
+        """
+        Determine how many top-ranked features to mask based on the evaluator
+        configuration (fractional removal or fixed count).
+        """
+        if self._removal_mode == "count":
+            k = max(self.min_features, self._removal_count)
+        else:
+            frac = self.removal_fraction if self.removal_fraction is not None else 0.0
+            k = max(self.min_features, int(np.ceil(frac * n_features)))
+        return max(1, min(k, n_features))
     
     def _feature_importance_vector(self, explanation: Dict[str, Any]) -> Optional[np.ndarray]:
         """
@@ -227,4 +251,3 @@ class CorrectnessEvaluator:
         if preds.size == 0:
             raise ValueError("Model.predict returned empty output.")
         return float(preds[0])
-

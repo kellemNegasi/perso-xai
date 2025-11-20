@@ -26,3 +26,4 @@ breast_cancer_lr_suite:
     - integrated_gradients_default
   metrics:
     - correctness
+    - continuity_stability

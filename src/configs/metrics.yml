@@ -4,3 +4,18 @@ correctness:
   params:
     removal_fraction: 0.1    # float=fraction of top features, int=absolute count
     default_baseline: 0.0    # value used when no baseline vector is provided
+
+output_completeness_deletion:
+  module: src.evaluators.correctness
+  class: CorrectnessEvaluator
+  params:
+    metric_key: output_completeness_deletion
+    removal_fraction: 0.1
+    default_baseline: 0.0
+
+continuity_stability:
+  module: src.evaluators.continuity
+  class: ContinuityEvaluator
+  params:
+    max_instances: 5
+    noise_scale: 0.01

@@ -68,6 +68,7 @@ class CorrectnessEvaluator:
         self,
         model: Any,
         explanation_results: Dict[str, Any],
+        dataset: Any | None = None,  # dataset currently unused; accepted for API symmetry
     ) -> Dict[str, float]:
         """
         Evaluate correctness for SHAP/LIME/IG/Causal SHAP explanations.

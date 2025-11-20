@@ -6,6 +6,7 @@ tabular_demo_suite:
     - lime_default
   metrics:
     - correctness
+    - compactness_size
 
 breast_cancer_rf_suite:
   dataset: breast_cancer
@@ -15,6 +16,7 @@ breast_cancer_rf_suite:
     - causal_shap_default
   metrics:
     - correctness
+    - compactness_size
 
 breast_cancer_lr_suite:
   dataset: breast_cancer
@@ -27,3 +29,4 @@ breast_cancer_lr_suite:
   metrics:
     - correctness
     - continuity_stability
+    - compactness_size

@@ -19,3 +19,9 @@ continuity_stability:
   params:
     max_instances: 5
     noise_scale: 0.01
+
+compactness_size:
+  module: src.evaluators.compactness
+  class: CompactnessEvaluator
+  params:
+    zero_tolerance: 1.0e-08

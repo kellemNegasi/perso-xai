@@ -37,8 +37,10 @@ Continuity currently reuses the stability-for-slight-variations test (Co-12 Sect
 ### 5. CONTRASTIVITY
 
 ### 6. COVARIATE COMPLEXITY
+Covariate complexity from Co-12 Section 6.6 is implemented by `CovariateComplexityEvaluator` (`src/evaluators/covariate_complexity.py`). It iterates over each instance’s attribution vector, converts magnitudes into a probability distribution, and reports the normalized Shannon entropy (`covariate_complexity`) plus its complement (`covariate_regularity`). Enable it through the `covariate_complexity` entry in `src/configs/metrics.yml`; all bundled experiment suites request it so the new scores automatically appear next to correctness, continuity, and compactness.
 
 ### 7 COMPACTNESS
+`CompactnessEvaluator` (`src/evaluators/compactness.py`) aggregates the Size-style metrics from Co-12 Section 6.7. For each explanation it measures (a) sparsity—the fraction of near-zero attributions, (b) top-5 / top-10 coverage—how much attribution mass lives on the most important features, and (c) effective feature count—an inverse participation ratio normalized so 1.0 means a single dominant feature. The evaluator averages those scores across instances and is wired up through the `compactness_size` entry in `src/configs/metrics.yml`; every experiment suite requests it so you can monitor explanation brevity alongside correctness and regularity.
 
 ### 8 COMPOSITION
 

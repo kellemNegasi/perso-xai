@@ -32,3 +32,12 @@ covariate_complexity:
   params:
     metric_key: covariate_complexity
     regularity_key: covariate_regularity
+
+completeness_deletion:
+  module: src.evaluators.completeness
+  class: CompletenessEvaluator
+  params:
+    magnitude_threshold: 1.0e-08
+    min_features: 1
+    random_trials: 10
+    default_baseline: 0.0

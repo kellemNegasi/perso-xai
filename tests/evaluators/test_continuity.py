@@ -1,41 +1,67 @@
 import numpy as np
 import pytest
 
-from src.evaluators.correctness import CorrectnessEvaluator
+from src.evaluators.continuity import ContinuityEvaluator
 
 
-class LinearProbModel:
-    def __init__(self, weights, bias=0.0):
-        self.weights = np.asarray(weights, dtype=float)
-        self.bias = float(bias)
+class DummyDataset:
+    def __init__(self):
+        self.X_train = np.array(
+            [
+                [0.0, 0.0, 0.0],
+                [1.0, 1.0, 1.0],
+            ],
+            dtype=float,
+        )
 
-    def predict_proba(self, X):
-        logits = X @ self.weights + self.bias
-        probs = 1.0 / (1.0 + np.exp(-logits))
-        return np.column_stack([1.0 - probs, probs])
+
+class EchoExplainer:
+    def __init__(self, importance):
+        self.importance = np.asarray(importance, dtype=float)
+
+    def explain_instance(self, instance):
+        return {
+            "attributions": self.importance.tolist(),
+            "instance": np.asarray(instance, dtype=float).tolist(),
+        }
 
 
-def test_correctness_feature_removal_matches_expected_drop():
-    model = LinearProbModel(weights=[0.6, -0.4, 0.2])
-    instance = np.array([1.0, -2.0, 0.5], dtype=float)
-    proba = model.predict_proba(instance.reshape(1, -1))[0]
+def _base_results():
+    base_importance = [0.3, -0.2, 0.1]
+    explanations = [
+        {"instance": [1.0, 2.0, 3.0], "attributions": base_importance},
+        {"instance": [0.5, 1.5, 2.5], "attributions": base_importance},
+    ]
+    return {"method": "shap", "explanations": explanations}, base_importance
 
-    explanation = {
-        "attributions": [0.9, 0.2, 0.6],
-        "instance": instance.tolist(),
-        "metadata": {"baseline_instance": [0.0, 0.0, 0.0]},
-        "prediction_proba": proba.tolist(),
-    }
-    explanation_results = {"method": "shap", "explanations": [explanation]}
 
-    evaluator = CorrectnessEvaluator(removal_fraction=0.5, default_baseline=0.0, min_features=1)
-    scores = evaluator.evaluate(model, explanation_results, dataset=None, explainer=None)
+def test_continuity_batch_zero_noise_yields_one():
+    explanation_results, base_importance = _base_results()
+    evaluator = ContinuityEvaluator(max_instances=2, noise_scale=0.0)
+    dataset = DummyDataset()
+    explainer = EchoExplainer(base_importance)
 
-    mask_indices = np.array([0, 2], dtype=int)
-    orig_pred = proba[1]
-    perturbed = instance.copy()
-    perturbed[mask_indices] = 0.0
-    new_pred = model.predict_proba(perturbed.reshape(1, -1))[0, 1]
-    expected_drop = abs(orig_pred - new_pred) / (abs(orig_pred) + 1e-8)
+    scores = evaluator.evaluate(
+        model=None,
+        explanation_results=explanation_results,
+        dataset=dataset,
+        explainer=explainer,
+    )
+    assert scores["continuity_stability"] == pytest.approx(1.0, abs=1e-9)
 
-    assert scores["correctness"] == pytest.approx(expected_drop, abs=1e-9)
+
+def test_continuity_per_instance_uses_current_index():
+    explanation_results, base_importance = _base_results()
+    evaluator = ContinuityEvaluator(max_instances=2, noise_scale=0.0)
+    dataset = DummyDataset()
+    explainer = EchoExplainer(base_importance)
+
+    payload = dict(explanation_results)
+    payload["current_index"] = 0
+    scores = evaluator.evaluate(
+        model=None,
+        explanation_results=payload,
+        dataset=dataset,
+        explainer=explainer,
+    )
+    assert scores["continuity_stability"] == pytest.approx(1.0, abs=1e-9)

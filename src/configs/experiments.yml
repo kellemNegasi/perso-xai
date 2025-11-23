@@ -9,6 +9,7 @@ tabular_demo_suite:
     - completeness_deletion
     - compactness_size
     - covariate_complexity
+    - contrastivity_ssim
 
 breast_cancer_rf_suite:
   dataset: breast_cancer
@@ -21,6 +22,7 @@ breast_cancer_rf_suite:
     - completeness_deletion
     - compactness_size
     - covariate_complexity
+    - contrastivity_ssim
 
 breast_cancer_lr_suite:
   dataset: breast_cancer
@@ -36,3 +38,4 @@ breast_cancer_lr_suite:
     - completeness_deletion
     - compactness_size
     - covariate_complexity
+    - contrastivity_ssim

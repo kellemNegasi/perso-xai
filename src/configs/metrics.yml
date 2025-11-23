@@ -41,3 +41,11 @@ completeness_deletion:
     min_features: 1
     random_trials: 10
     default_baseline: 0.0
+
+contrastivity_ssim:
+  module: src.evaluators.contrastivity
+  class: ContrastivityEvaluator
+  params:
+    pairs_per_instance: 3
+    normalise: true
+    similarity_func: src.evaluators.utils.structural_similarity

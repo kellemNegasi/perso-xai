@@ -31,6 +31,8 @@ class ContrastivityEvaluator(MetricCapabilities):
     """
     Estimate target contrastivity by comparing attributions across classes.
 
+    Adapted from the Random Logit metric by Sixt et al. (2020) / Quantus library.
+    
     For each explanation we repeatedly sample a reference explanation predicted
     for a different class and compute SSIM similarity between the attribution
     vectors. Scores are inverted (1 - SSIM) so higher values indicate that

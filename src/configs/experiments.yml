@@ -10,6 +10,7 @@ tabular_demo_suite:
     - compactness_size
     - covariate_complexity
     - contrastivity_ssim
+    - confidence
 
 breast_cancer_rf_suite:
   dataset: breast_cancer
@@ -23,6 +24,7 @@ breast_cancer_rf_suite:
     - compactness_size
     - covariate_complexity
     - contrastivity_ssim
+    - confidence
 
 breast_cancer_lr_suite:
   dataset: breast_cancer
@@ -39,3 +41,4 @@ breast_cancer_lr_suite:
     - compactness_size
     - covariate_complexity
     - contrastivity_ssim
+    - confidence

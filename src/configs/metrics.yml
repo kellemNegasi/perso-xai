@@ -49,3 +49,13 @@ contrastivity_ssim:
     pairs_per_instance: 3
     normalise: true
     similarity_func: src.evaluators.utils.structural_similarity
+
+confidence:
+  module: src.evaluators.confidence
+  class: ConfidenceEvaluator
+  params:
+    n_resamples: 8
+    ci_percentile: 95.0
+    max_instances: 10
+    noise_scale: 0.005
+    random_baseline: true

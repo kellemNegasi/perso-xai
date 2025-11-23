@@ -4,6 +4,7 @@ from .compactness import CompactnessEvaluator
 from .covariate_complexity import CovariateComplexityEvaluator
 from .completeness import CompletenessEvaluator
 from .contrastivity import ContrastivityEvaluator
+from .confidence import ConfidenceEvaluator
 
 __all__ = [
     "CorrectnessEvaluator",
@@ -12,4 +13,5 @@ __all__ = [
     "CovariateComplexityEvaluator",
     "CompletenessEvaluator",
     "ContrastivityEvaluator",
+    "ConfidenceEvaluator",
 ]

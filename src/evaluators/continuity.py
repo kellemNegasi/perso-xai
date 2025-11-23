@@ -13,6 +13,8 @@ from typing import Any, Dict, List, Optional, Sequence
 
 import numpy as np
 
+from .base_metric import MetricCapabilities, MetricInput
+
 _FEATURE_METHOD_KEYS = {
     "shap",
     "lime",
@@ -23,11 +25,11 @@ _FEATURE_METHOD_KEYS = {
 }
 
 
-class ContinuityEvaluator:
-    """
-    Estimates explanation continuity by perturbing inputs slightly and checking whether
-    the resulting explanation remains similar.
-    """
+class ContinuityEvaluator(MetricCapabilities):
+    """Continuity estimator that perturbs inputs and checks attribution stability."""
+
+    per_instance = True
+    requires_full_batch = False
 
     def __init__(
         self,
@@ -64,68 +66,82 @@ class ContinuityEvaluator:
         explainer: Any | None = None,
     ) -> Dict[str, float]:
         """
-        Perturb a few instances and measure how similar their explanations remain.
+        Perturb instances and measure how similar their explanations remain.
 
         Parameters
         ----------
         model : Any
-            Present for API symmetry; the current continuity metric does not invoke it.
+            Present for API symmetry; unused by the current metric.
         explanation_results : Dict[str, Any]
-            Output dict returned by ``BaseExplainer.explain_dataset`` containing
-            per-instance explanations with attribution vectors.
+            Output from ``BaseExplainer.explain_dataset`` (may include ``current_index``).
         dataset : Any | None, optional
-            Dataset object providing `X_train`; used to estimate feature-wise standard
-            deviations so perturbations respect the data scale.
+            Dataset reference used to estimate feature-wise standard deviations.
         explainer : Any | None, optional
-            Fitted explainer instance exposing ``explain_instance`` so we can obtain
-            true attributions for perturbed samples.
+            Explainer instance used to re-run explanations on perturbed inputs.
 
         Returns
         -------
         Dict[str, float]
-            A single-entry dictionary mapping ``metric_key`` to the average absolute
-            correlation between original and perturbed attributions.
+            Dictionary containing the continuity score keyed by ``metric_key``.
         """
-        method = (explanation_results.get("method") or "").lower()
-        if method not in _FEATURE_METHOD_KEYS:
+        metric_input = MetricInput.from_results(
+            model=model,
+            explanation_results=explanation_results,
+            dataset=dataset,
+            explainer=explainer,
+        )
+        return self._evaluate(metric_input)
+
+    def _evaluate(self, metric_input: MetricInput) -> Dict[str, float]:
+        """
+        Compute the continuity score given a MetricInput payload.
+
+        Parameters
+        ----------
+        metric_input : MetricInput
+            Standardized evaluator context containing explanations and metadata.
+
+        Returns
+        -------
+        Dict[str, float]
+            Dictionary with the continuity score (or zero if inputs invalid).
+        """
+        if metric_input.method not in self.supported_methods:
             return {self.metric_key: 0.0}
 
-        explanations = explanation_results.get("explanations") or []
+        explanations = metric_input.explanations
         if not explanations:
             return {self.metric_key: 0.0}
 
-        feature_std = self._dataset_feature_std(dataset, explanations[0])
-        rng = np.random.default_rng(self.random_state)
+        feature_std = self._dataset_feature_std(metric_input.dataset, explanations[0])
 
+        if metric_input.explanation_idx is not None:
+            idx = metric_input.explanation_idx
+            if not (0 <= idx < len(explanations)):
+                return {self.metric_key: 0.0}
+            seed = None if self.random_state is None else self.random_state + int(idx)
+            rng = np.random.default_rng(seed)
+            score = self._continuity_score(
+                explanation=explanations[idx],
+                feature_std=feature_std,
+                rng=rng,
+                explainer=metric_input.explainer,
+            )
+            return {self.metric_key: float(score) if score is not None else 0.0}
+
+        rng = np.random.default_rng(self.random_state)
         similarities: List[float] = []
         n_samples = min(self.max_instances, len(explanations))
 
         for i in range(n_samples):
-            explanation = explanations[i]
-            instance = self._instance_vector(explanation)
-            importance = self._importance_vector(explanation)
-            if instance is None or importance is None or importance.size == 0:
-                continue
-
-            std_vec = self._match_std_vector(feature_std, instance.shape[0])
-            noise = rng.normal(0.0, std_vec * self.noise_scale, size=instance.shape[0])
-            perturbed_instance = instance + noise
-
-            perturbed_importance = self._true_perturbed_importance(
-                explainer=explainer,
-                perturbed_instance=perturbed_instance,
+            score = self._continuity_score(
+                explanation=explanations[i],
+                feature_std=feature_std,
+                rng=rng,
+                explainer=metric_input.explainer,
             )
-            # If needed later we can re-enable the approximation fallback or to save time:
-            # if perturbed_importance is None:
-            #     perturbed_importance = self._approximate_perturbed_importance(
-            #         instance, perturbed_instance, importance
-            #     )
-            if perturbed_importance is None or perturbed_importance.size != importance.size:
-                continue
-
-            corr = self._similarity(importance, perturbed_importance)
-            if corr is not None and not np.isnan(corr):
-                similarities.append(abs(corr))
+            if score is not None:
+                similarities.append(score)
 
         score = float(np.mean(similarities)) if similarities else 0.0
         return {self.metric_key: score}
@@ -203,6 +219,35 @@ class ContinuityEvaluator:
             arr = arr.reshape(-1)
         return arr.astype(float)
 
+    def _continuity_score(
+        self,
+        explanation: Dict[str, Any],
+        feature_std: Optional[np.ndarray],
+        rng: np.random.Generator,
+        explainer: Any | None,
+    ) -> Optional[float]:
+        """Return absolute correlation between original and perturbed explanations."""
+        instance = self._instance_vector(explanation)
+        importance = self._importance_vector(explanation)
+        if instance is None or importance is None or importance.size == 0:
+            return None
+
+        std_vec = self._match_std_vector(feature_std, instance.shape[0])
+        noise = rng.normal(0.0, std_vec * self.noise_scale, size=instance.shape[0])
+        perturbed_instance = instance + noise
+
+        perturbed_importance = self._true_perturbed_importance(
+            explainer=explainer,
+            perturbed_instance=perturbed_instance,
+        )
+        if perturbed_importance is None or perturbed_importance.size != importance.size:
+            return None
+
+        corr = self._similarity(importance, perturbed_importance)
+        if corr is None or np.isnan(corr):
+            return None
+        return abs(corr)
+
     def _true_perturbed_importance(
         self,
         explainer: Any | None,
@@ -259,3 +304,7 @@ class ContinuityEvaluator:
             return float(corr)
         except Exception:
             return None
+    per_instance = False
+    requires_full_batch = True
+    metric_names = ()
+    supported_methods = tuple(_FEATURE_METHOD_KEYS)

@@ -14,6 +14,7 @@ from typing import Any, Callable, Dict, List, Optional, Sequence, Union
 
 import numpy as np
 
+from .base_metric import MetricCapabilities, MetricInput
 from .utils import structural_similarity as default_structural_similarity
 
 _FEATURE_METHOD_KEYS = {
@@ -26,7 +27,7 @@ _FEATURE_METHOD_KEYS = {
 }
 
 
-class ContrastivityEvaluator:
+class ContrastivityEvaluator(MetricCapabilities):
     """
     Estimate target contrastivity by comparing attributions across classes.
 
@@ -35,6 +36,11 @@ class ContrastivityEvaluator:
     vectors. Scores are inverted (1 - SSIM) so higher values indicate that
     explanations differ strongly across classes (i.e., high contrastivity).
     """
+
+    per_instance = True
+    requires_full_batch = True
+    metric_names = ("contrastivity", "contrastivity_pairs")
+    supported_methods = tuple(_FEATURE_METHOD_KEYS)
 
     def __init__(
         self,
@@ -72,21 +78,60 @@ class ContrastivityEvaluator:
     ) -> Dict[str, float]:
         """
         Compute the average contrastivity score over a batch of explanations.
+
+        Parameters
+        ----------
+        model : Any
+            Trained model associated with the explanations (unused placeholder).
+        explanation_results : Dict[str, Any]
+            Output dict from ``BaseExplainer.explain_dataset``.
+        dataset : Any | None, optional
+            Dataset reference (unused placeholder).
+        explainer : Any | None, optional
+            Explainer instance (unused placeholder).
+
+        Returns
+        -------
+        Dict[str, float]
+            Dictionary containing average contrastivity and number of evaluated pairs.
         """
-        method = (explanation_results.get("method") or "").lower()
-        if method not in _FEATURE_METHOD_KEYS:
+        metric_input = MetricInput.from_results(
+            model=model,
+            explanation_results=explanation_results,
+            dataset=dataset,
+            explainer=explainer,
+        )
+        return self._evaluate(metric_input)
+
+    def _evaluate(self, metric_input: MetricInput) -> Dict[str, float]:
+        """
+        Internal helper operating directly on MetricInput.
+
+        Parameters
+        ----------
+        metric_input : MetricInput
+            Standardized evaluator payload containing batch explanations.
+
+        Returns
+        -------
+        Dict[str, float]
+            Averaged contrastivity and pair count (zeros if requirements unmet).
+        """
+        if metric_input.method not in self.supported_methods:
             return self._empty_result()
 
-        explanations = explanation_results.get("explanations") or []
+        explanations = metric_input.explanations
         if len(explanations) < 2:
             return self._empty_result()
 
         labeled_importance: List[tuple[Any, np.ndarray]] = []
-        for explanation in explanations:
+        orig_to_filtered: Dict[int, int] = {}
+        for orig_idx, explanation in enumerate(explanations):
             importance = self._importance_vector(explanation)
             label = self._prediction_label(explanation)
             if importance is None or label is None:
                 continue
+            orig_to_filtered[orig_idx] = len(labeled_importance)
             labeled_importance.append((label, importance))
 
         if len(labeled_importance) < 2:
@@ -102,20 +147,30 @@ class ContrastivityEvaluator:
         for idx, label in enumerate(labels):
             label_indices.setdefault(label, []).append(idx)
 
+        if metric_input.explanation_idx is not None:
+            filtered_idx = orig_to_filtered.get(metric_input.explanation_idx)
+            if filtered_idx is None:
+                return self._empty_result()
+            seed = None if self.random_state is None else self.random_state + int(metric_input.explanation_idx)
+            rng = np.random.default_rng(seed)
+            scores = self._contrastive_scores_for_index(
+                filtered_idx, labeled_importance, unique_labels, label_indices, rng
+            )
+            if not scores:
+                return self._empty_result()
+            return {
+                "contrastivity": float(np.mean(scores)),
+                "contrastivity_pairs": float(len(scores)),
+            }
+
         rng = np.random.default_rng(self.random_state)
         contrastive_scores: List[float] = []
 
-        for idx, (label, importance) in enumerate(labeled_importance):
-            candidate_labels = [lbl for lbl in unique_labels if lbl != label and label_indices.get(lbl)]
-            if not candidate_labels:
-                continue
-            for _ in range(self.pairs_per_instance):
-                ref_label = rng.choice(candidate_labels)
-                ref_idx = int(rng.choice(label_indices[ref_label]))
-                ref_importance = labeled_importance[ref_idx][1]
-                score = self._contrastive_score(importance, ref_importance)
-                if score is not None:
-                    contrastive_scores.append(score)
+        for idx in range(len(labeled_importance)):
+            scores = self._contrastive_scores_for_index(
+                idx, labeled_importance, unique_labels, label_indices, rng
+            )
+            contrastive_scores.extend(scores)
 
         if not contrastive_scores:
             return self._empty_result()
@@ -213,6 +268,30 @@ class ContrastivityEvaluator:
 
     def _empty_result(self) -> Dict[str, float]:
         return {"contrastivity": 0.0, "contrastivity_pairs": 0.0}
+
+    def _contrastive_scores_for_index(
+        self,
+        target_idx: int,
+        labeled_importance: List[tuple[Any, np.ndarray]],
+        unique_labels: List[Any],
+        label_indices: Dict[Any, List[int]],
+        rng: np.random.Generator,
+    ) -> List[float]:
+        """Sample contrastive scores anchored to a specific explanation index."""
+        label, importance = labeled_importance[target_idx]
+        candidate_labels = [lbl for lbl in unique_labels if lbl != label and label_indices.get(lbl)]
+        if not candidate_labels:
+            return []
+
+        scores: List[float] = []
+        for _ in range(self.pairs_per_instance):
+            ref_label = rng.choice(candidate_labels)
+            ref_idx = int(rng.choice(label_indices[ref_label]))
+            ref_importance = labeled_importance[ref_idx][1]
+            score = self._contrastive_score(importance, ref_importance)
+            if score is not None:
+                scores.append(score)
+        return scores
 
     def _resolve_similarity_func(
         self,

@@ -13,6 +13,8 @@ from typing import Any, Dict, List, Optional, Sequence
 
 import numpy as np
 
+from .base_metric import MetricCapabilities, MetricInput
+
 
 _FEATURE_METHOD_KEYS = {
     "shap",
@@ -24,7 +26,7 @@ _FEATURE_METHOD_KEYS = {
 }
 
 
-class CorrectnessEvaluator:
+class CorrectnessEvaluator(MetricCapabilities):
     """
     Computes a correctness score via a feature-removal test.
 
@@ -40,6 +42,11 @@ class CorrectnessEvaluator:
     min_features : int
         Minimum number of features to mask, regardless of ``removal_fraction``.
     """
+
+    per_instance = True
+    requires_full_batch = False
+    metric_names = ("correctness",)
+    supported_methods = tuple(_FEATURE_METHOD_KEYS)
 
     def __init__(
         self,
@@ -81,8 +88,8 @@ class CorrectnessEvaluator:
         self,
         model: Any,
         explanation_results: Dict[str, Any],
-        dataset: Any | None = None,  # dataset currently unused; accepted for API symmetry
-        explainer: Any | None = None,  # explainer unused; kept for interface parity
+        dataset: Any | None = None,
+        explainer: Any | None = None,
     ) -> Dict[str, float]:
         """
         Evaluate correctness for SHAP/LIME/IG/Causal SHAP explanations.
@@ -90,36 +97,65 @@ class CorrectnessEvaluator:
         Parameters
         ----------
         model : Any
-            Trained model that produced the explanations (must expose ``predict`` and
-            optionally ``predict_proba``).
+            Trained model associated with the explanations (must expose predict /
+            predict_proba used during feature masking).
         explanation_results : Dict[str, Any]
-            Output dict from ``BaseExplainer.explain_dataset``.
+            Output of ``BaseExplainer.explain_dataset`` (or compatible structure
+            containing ``method`` and ``explanations`` entries).
         dataset : Any | None, optional
-            Unused placeholder to keep the metric interface aligned with other
-            evaluators.
+            Dataset object (unused currently but accepted for interface parity).
         explainer : Any | None, optional
-            Unused placeholder included for interface parity with other metrics.
+            Explainer instance (unused, kept for symmetry with other evaluators).
 
         Returns
         -------
         Dict[str, float]
-            {"correctness": score in [0, 1]} – returns 0.0 if inputs are incompatible.
+            Mapping with a single ``"correctness"`` entry in [0, 1].
         """
-        method = (explanation_results.get("method") or "").lower()
-        if method not in _FEATURE_METHOD_KEYS:
+        metric_input = MetricInput.from_results(
+            model=model,
+            explanation_results=explanation_results,
+            dataset=dataset,
+            explainer=explainer,
+        )
+        return self._evaluate(metric_input)
+
+    def _evaluate(self, metric_input: MetricInput) -> Dict[str, float]:
+        """
+        Return correctness score using a fully prepared MetricInput.
+
+        Parameters
+        ----------
+        metric_input : MetricInput
+            Unified payload describing the model/dataset/explanations context.
+
+        Returns
+        -------
+        Dict[str, float]
+            Dictionary with the averaged correctness score (or per-instance value
+            when ``explanation_idx`` is provided).
+        """
+        if metric_input.method not in self.supported_methods:
             self.logger.info(
                 "CorrectnessEvaluator skipped: method '%s' not a feature-attribution explainer",
-                method,
+                metric_input.method,
             )
             return {"correctness": 0.0}
 
-        explanations = explanation_results.get("explanations") or []
+        explanations = metric_input.explanations
         if not explanations:
             return {"correctness": 0.0}
 
+        if metric_input.explanation_idx is not None:
+            idx = metric_input.explanation_idx
+            if not (0 <= idx < len(explanations)):
+                return {"correctness": 0.0}
+            score = self._feature_removal_score(metric_input.model, explanations[idx])
+            return {"correctness": float(score) if score is not None else 0.0}
+
         scores: List[float] = []
         for explanation in explanations:
-            score = self._feature_removal_score(model, explanation)
+            score = self._feature_removal_score(metric_input.model, explanation)
             if score is not None:
                 scores.append(score)
 

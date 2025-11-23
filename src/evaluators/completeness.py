@@ -14,6 +14,8 @@ from typing import Any, Dict, List, Optional, Sequence
 
 import numpy as np
 
+from .base_metric import MetricCapabilities, MetricInput
+
 _FEATURE_METHOD_KEYS = {
     "shap",
     "lime",
@@ -23,10 +25,23 @@ _FEATURE_METHOD_KEYS = {
 }
 
 
-class CompletenessEvaluator:
+class CompletenessEvaluator(MetricCapabilities):
     """
     Measure completeness by masking the entire attribution support and comparing
     the resulting prediction drop with random deletions of equal size.
+
+    Parameters
+    ----------
+    magnitude_threshold : float, optional
+        Absolute attribution magnitude threshold defining the support.
+    min_features : int, optional
+        Minimum number of features to mask regardless of threshold.
+    random_trials : int, optional
+        Number of random deletion baselines to compute per explanation.
+    default_baseline : float, optional
+        Value used to fill masked features when no explainer baseline is given.
+    random_state : int | None, optional
+        Seed for the random baseline sampler.
     """
 
     def __init__(
@@ -66,62 +81,75 @@ class CompletenessEvaluator:
         self,
         model: Any,
         explanation_results: Dict[str, Any],
-        dataset: Any | None = None,  # unused, kept for evaluator API symmetry
-        explainer: Any | None = None,  # unused placeholder
+        dataset: Any | None = None,
+        explainer: Any | None = None,
     ) -> Dict[str, float]:
         """
         Compute deletion-check completeness metrics for a batch of explanations.
+
+        Parameters
+        ----------
+        model : Any
+            Trained model that produced the explanations.
+        explanation_results : Dict[str, Any]
+            Output dict from ``BaseExplainer.explain_dataset``.
+        dataset : Any | None, optional
+            Dataset reference (unused placeholder).
+        explainer : Any | None, optional
+            Explainer instance (unused placeholder).
+
+        Returns
+        -------
+        Dict[str, float]
+            Averaged completeness metrics (drop, random drop, score).
         """
-        method = (explanation_results.get("method") or "").lower()
-        if method not in _FEATURE_METHOD_KEYS:
+        metric_input = MetricInput.from_results(
+            model=model,
+            explanation_results=explanation_results,
+            dataset=dataset,
+            explainer=explainer,
+        )
+        return self._evaluate(metric_input)
+
+    def _evaluate(self, metric_input: MetricInput) -> Dict[str, float]:
+        """
+        Internal helper operating directly on MetricInput.
+
+        Parameters
+        ----------
+        metric_input : MetricInput
+            Standardized evaluator payload.
+
+        Returns
+        -------
+        Dict[str, float]
+            Aggregated completeness metrics or zeros if inputs are invalid.
+        """
+        if metric_input.method not in self.supported_methods:
             return self._empty_result()
 
-        explanations = explanation_results.get("explanations") or []
+        explanations = metric_input.explanations
         if not explanations:
             return self._empty_result()
+
+        if metric_input.explanation_idx is not None:
+            idx = metric_input.explanation_idx
+            if not (0 <= idx < len(explanations)):
+                return self._empty_result()
+            metrics = self._metrics_for_explanation(metric_input.model, explanations[idx])
+            return metrics or self._empty_result()
 
         drops: List[float] = []
         baseline_drops: List[float] = []
         scores: List[float] = []
 
         for explanation in explanations:
-            importance = self._importance_vector(explanation)
-            if importance is None:
+            metrics = self._metrics_for_explanation(metric_input.model, explanation)
+            if not metrics:
                 continue
-
-            instance = self._extract_instance(explanation)
-            if instance is None:
-                continue
-
-            baseline = self._baseline_vector(explanation, instance)
-            orig_pred = self._prediction_value(explanation)
-            if orig_pred is None:
-                continue
-
-            mask_indices = self._support_indices(importance)
-            if mask_indices.size == 0:
-                continue
-
-            target_drop = self._normalized_drop(
-                model, instance, baseline, mask_indices, orig_pred
-            )
-            if target_drop is None:
-                continue
-            drops.append(target_drop)
-
-            random_values = self._random_baseline_drops(
-                model,
-                instance,
-                baseline,
-                len(importance),
-                len(mask_indices),
-                orig_pred,
-            )
-            random_mean = float(np.mean(random_values)) if random_values else 0.0
-            baseline_drops.append(random_mean)
-
-            score = max(0.0, target_drop - random_mean)
-            scores.append(score)
+            drops.append(metrics["completeness_drop"])
+            baseline_drops.append(metrics["completeness_random_drop"])
+            scores.append(metrics["completeness_score"])
 
         if not drops:
             return self._empty_result()
@@ -137,10 +165,46 @@ class CompletenessEvaluator:
     # ------------------------------------------------------------------ #
 
     def _empty_result(self) -> Dict[str, float]:
+        return {key: 0.0 for key in self.metric_names}
+
+    def _metrics_for_explanation(self, model: Any, explanation: Dict[str, Any]) -> Optional[Dict[str, float]]:
+        importance = self._importance_vector(explanation)
+        if importance is None:
+            return None
+
+        instance = self._extract_instance(explanation)
+        if instance is None:
+            return None
+
+        baseline = self._baseline_vector(explanation, instance)
+        orig_pred = self._prediction_value(explanation)
+        if orig_pred is None:
+            return None
+
+        mask_indices = self._support_indices(importance)
+        if mask_indices.size == 0:
+            return None
+
+        target_drop = self._normalized_drop(
+            model, instance, baseline, mask_indices, orig_pred
+        )
+        if target_drop is None:
+            return None
+
+        random_values = self._random_baseline_drops(
+            model,
+            instance,
+            baseline,
+            len(importance),
+            len(mask_indices),
+            orig_pred,
+        )
+        random_mean = float(np.mean(random_values)) if random_values else 0.0
+        score = max(0.0, target_drop - random_mean)
         return {
-            "completeness_drop": 0.0,
-            "completeness_random_drop": 0.0,
-            "completeness_score": 0.0,
+            "completeness_drop": target_drop,
+            "completeness_random_drop": random_mean,
+            "completeness_score": score,
         }
 
     def _importance_vector(self, explanation: Dict[str, Any]) -> Optional[np.ndarray]:
@@ -289,4 +353,11 @@ class CompletenessEvaluator:
         if preds.size == 0:
             raise ValueError("Model.predict returned empty output.")
         return float(preds[0])
-
+    per_instance = True
+    requires_full_batch = False
+    metric_names = (
+        "completeness_drop",
+        "completeness_random_drop",
+        "completeness_score",
+    )
+    supported_methods = tuple(_FEATURE_METHOD_KEYS)

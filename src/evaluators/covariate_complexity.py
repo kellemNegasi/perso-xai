@@ -13,6 +13,8 @@ from typing import Any, Dict, List, Optional, Sequence
 
 import numpy as np
 
+from .base_metric import MetricCapabilities, MetricInput
+
 _FEATURE_METHOD_KEYS = {
     "shap",
     "lime",
@@ -23,8 +25,17 @@ _FEATURE_METHOD_KEYS = {
 }
 
 
-class CovariateComplexityEvaluator:
-    """Evaluate average Shannon entropy (and its complement) over local explanations."""
+class CovariateComplexityEvaluator(MetricCapabilities):
+    """
+    Evaluate average Shannon entropy (and its complement) over local explanations.
+
+    Parameters
+    ----------
+    metric_key : str, optional
+        Dictionary key used for the normalized entropy output.
+    regularity_key : str, optional
+        Dictionary key for the 1 - entropy complement (higher is better).
+    """
 
     def __init__(
         self,
@@ -57,27 +68,64 @@ class CovariateComplexityEvaluator:
         Parameters
         ----------
         model : Any
-            Present for API symmetry; not used by this metric.
+            Present for API symmetry; unused by this metric.
         explanation_results : Dict[str, Any]
             Output dict from ``BaseExplainer.explain_dataset`` containing per-instance
             explanations with attribution scores.
         dataset : Any | None, optional
-            Accepted for interface compatibility; unused.
+            Dataset reference (unused placeholder).
         explainer : Any | None, optional
-            Accepted for interface compatibility; unused.
-        """
-        del model, dataset, explainer  # unused but kept for API parity
+            Explainer instance (unused placeholder).
 
-        method = (explanation_results.get("method") or "").lower()
-        if method not in _FEATURE_METHOD_KEYS:
+        Returns
+        -------
+        Dict[str, float]
+            Dictionary containing the averaged complexity and regularity scores.
+        """
+        metric_input = MetricInput.from_results(
+            model=model,
+            explanation_results=explanation_results,
+            dataset=dataset,
+            explainer=explainer,
+        )
+        return self._evaluate(metric_input)
+
+    def _evaluate(self, metric_input: MetricInput) -> Dict[str, float]:
+        """
+        Internal helper operating directly on MetricInput.
+
+        Parameters
+        ----------
+        metric_input : MetricInput
+            Standardized evaluator payload.
+
+        Returns
+        -------
+        Dict[str, float]
+            Aggregated complexity/regularity metrics or zeros if inputs are invalid.
+        """
+        if metric_input.method not in self.supported_methods:
             return {
                 self.metric_key: 0.0,
                 self.regularity_key: 0.0,
             }
 
-        explanations = explanation_results.get("explanations") or []
+        explanations = metric_input.explanations
         if not explanations:
             return {
+                self.metric_key: 0.0,
+                self.regularity_key: 0.0,
+            }
+
+        if metric_input.explanation_idx is not None:
+            idx = metric_input.explanation_idx
+            if not (0 <= idx < len(explanations)):
+                return {
+                    self.metric_key: 0.0,
+                    self.regularity_key: 0.0,
+                }
+            metrics = self._metrics_for_explanation(explanations[idx])
+            return metrics or {
                 self.metric_key: 0.0,
                 self.regularity_key: 0.0,
             }
@@ -86,28 +134,11 @@ class CovariateComplexityEvaluator:
         regularities: List[float] = []
 
         for explanation in explanations:
-            importance = self._importance_vector(explanation)
-            if importance is None or importance.size == 0:
+            metrics = self._metrics_for_explanation(explanation)
+            if not metrics:
                 continue
-
-            if not np.all(np.isfinite(importance)):
-                continue
-
-            importance = np.abs(importance)
-            total = float(np.sum(importance))
-            if total <= 0.0:
-                entropies.append(0.0)
-                regularities.append(1.0)
-                continue
-
-            prob = importance / total
-            entropy = self._shannon_entropy(prob)
-            max_entropy = np.log2(prob.size) if prob.size > 1 else 0.0
-            normalized = float(entropy / max_entropy) if max_entropy > 0 else 0.0
-            normalized = float(np.clip(normalized, 0.0, 1.0))
-
-            entropies.append(normalized)
-            regularities.append(1.0 - normalized)
+            entropies.append(metrics[self.metric_key])
+            regularities.append(metrics[self.regularity_key])
 
         complexity = float(np.mean(entropies)) if entropies else 0.0
         regularity = float(np.mean(regularities)) if regularities else 0.0
@@ -119,6 +150,31 @@ class CovariateComplexityEvaluator:
     # ------------------------------------------------------------------ #
     # Helpers
     # ------------------------------------------------------------------ #
+
+    def _metrics_for_explanation(self, explanation: Dict[str, Any]) -> Optional[Dict[str, float]]:
+        importance = self._importance_vector(explanation)
+        if importance is None or importance.size == 0:
+            return None
+        if not np.all(np.isfinite(importance)):
+            return None
+
+        importance = np.abs(importance)
+        total = float(np.sum(importance))
+        if total <= 0.0:
+            return {
+                self.metric_key: 0.0,
+                self.regularity_key: 1.0,
+            }
+
+        prob = importance / total
+        entropy = self._shannon_entropy(prob)
+        max_entropy = np.log2(prob.size) if prob.size > 1 else 0.0
+        normalized = float(entropy / max_entropy) if max_entropy > 0 else 0.0
+        normalized = float(np.clip(normalized, 0.0, 1.0))
+        return {
+            self.metric_key: normalized,
+            self.regularity_key: 1.0 - normalized,
+        }
 
     def _importance_vector(self, explanation: Dict[str, Any]) -> Optional[np.ndarray]:
         """
@@ -154,3 +210,7 @@ class CovariateComplexityEvaluator:
         safe_prob = np.clip(prob, 1e-12, 1.0)
         entropy = -float(np.sum(safe_prob * np.log2(safe_prob)))
         return entropy
+    per_instance = True
+    requires_full_batch = False
+    metric_names = ("covariate_complexity", "covariate_regularity")
+    supported_methods = tuple(_FEATURE_METHOD_KEYS)

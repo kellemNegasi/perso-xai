@@ -15,6 +15,8 @@ from typing import Any, Dict, List, Optional, Sequence
 
 import numpy as np
 
+from .base_metric import MetricCapabilities, MetricInput
+
 _FEATURE_METHOD_KEYS = {
     "shap",
     "lime",
@@ -25,8 +27,25 @@ _FEATURE_METHOD_KEYS = {
 }
 
 
-class CompactnessEvaluator:
-    """Aggregates Size-style compactness indicators for feature attributions."""
+class CompactnessEvaluator(MetricCapabilities):
+    """
+    Aggregates Size-style compactness indicators for feature attributions.
+
+    Parameters
+    ----------
+    zero_tolerance : float, optional
+        Magnitude threshold that defines a "near-zero" attribution.
+    """
+
+    per_instance = True
+    requires_full_batch = False
+    metric_names = (
+        "compactness_sparsity",
+        "compactness_top5_coverage",
+        "compactness_top10_coverage",
+        "compactness_effective_features",
+    )
+    supported_methods = tuple(_FEATURE_METHOD_KEYS)
 
     def __init__(self, *, zero_tolerance: float = 1e-8) -> None:
         """Store the magnitude threshold that defines a "near-zero" attribution."""
@@ -35,35 +54,69 @@ class CompactnessEvaluator:
 
     def evaluate(
         self,
-        model: Any,  # unused, kept for API symmetry
+        model: Any,
         explanation_results: Dict[str, Any],
-        dataset: Any | None = None,   # unused placeholder
-        explainer: Any | None = None, # unused placeholder
+        dataset: Any | None = None,
+        explainer: Any | None = None,
     ) -> Dict[str, float]:
-        """Return averaged compactness metrics for a batch of explanations."""
-        method = (explanation_results.get("method") or "").lower()
-        # input gating, make sure we only process supported methods
-        if method not in _FEATURE_METHOD_KEYS:
+        """
+        Return compactness metrics for a batch (or single) explanation.
+
+        Parameters
+        ----------
+        model : Any
+            Trained model tied to the explanations (unused but kept for parity).
+        explanation_results : Dict[str, Any]
+            Result dictionary produced by ``explain_dataset``.
+        dataset : Any | None, optional
+            Dataset reference (unused placeholder).
+        explainer : Any | None, optional
+            Explainer instance (unused placeholder).
+
+        Returns
+        -------
+        Dict[str, float]
+            Mapping for each compactness metric key defined in ``metric_names``.
+        """
+        metric_input = MetricInput.from_results(
+            model=model,
+            explanation_results=explanation_results,
+            dataset=dataset,
+            explainer=explainer,
+        )
+        return self._evaluate(metric_input)
+
+    def _evaluate(self, metric_input: MetricInput) -> Dict[str, float]:
+        """
+        Compute compactness metrics using a MetricInput payload.
+
+        Parameters
+        ----------
+        metric_input : MetricInput
+            Standardized evaluator input containing explanations/context.
+
+        Returns
+        -------
+        Dict[str, float]
+            Averaged compactness scores (or per-instance values when an index is set).
+        """
+        if metric_input.method not in self.supported_methods:
             return self._empty_result()
 
-        explanations = explanation_results.get("explanations") or []
+        explanations = metric_input.explanations
         if not explanations:
             return self._empty_result()
 
-        accumulators = {
-            "compactness_sparsity": [],
-            "compactness_top5_coverage": [],
-            "compactness_top10_coverage": [],
-            "compactness_effective_features": [],
-        }
+        if metric_input.explanation_idx is not None:
+            idx = metric_input.explanation_idx
+            if not (0 <= idx < len(explanations)):
+                return self._empty_result()
+            return self._metrics_for_explanation(explanations[idx])
 
+        accumulators = {key: [] for key in self.metric_names}
         for explanation in explanations:
-            importance = self._importance_vector(explanation)
-            if importance is None:
-                continue
-
-            metrics = self._feature_compactness(importance)
-            if metrics is None:
+            metrics = self._metrics_for_explanation(explanation)
+            if not metrics:
                 continue
             for key, value in metrics.items():
                 accumulators[key].append(value)
@@ -79,12 +132,15 @@ class CompactnessEvaluator:
 
     def _empty_result(self) -> Dict[str, float]:
         """Convenience helper that returns zeros for all compactness metrics."""
-        return {
-            "compactness_sparsity": 0.0,
-            "compactness_top5_coverage": 0.0,
-            "compactness_top10_coverage": 0.0,
-            "compactness_effective_features": 0.0,
-        }
+        return {key: 0.0 for key in self.metric_names}
+
+    def _metrics_for_explanation(self, explanation: Dict[str, Any]) -> Dict[str, float]:
+        """Return compactness metrics for a single explanation."""
+        importance = self._importance_vector(explanation)
+        if importance is None:
+            return {}
+        metrics = self._feature_compactness(importance)
+        return metrics or {}
 
     def _importance_vector(self, explanation: Dict[str, Any]) -> Optional[np.ndarray]:
         """Extract the attribution vector from an explanation dict or metadata."""

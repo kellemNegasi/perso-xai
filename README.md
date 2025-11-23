@@ -8,6 +8,23 @@ Human Centered XAI (HC-XAI) is a framework for generating, evaluating, and perso
 2. Present the resulting local explanations to human participants so they can label or rank their preferred styles.  
 3. Use those interactions to fit a ranker that maps context (model, instance, user) to the explanation style most likely to satisfy that person.
 
+### Running Experiments
+
+The old exploratory notebooks now delegate to a reusable orchestrator so that scripted runs and notebooks share the same code path. To reproduce the JSON artifacts shown in `notebooks/notebooks/results_per_instance_*` simply call:
+
+```python
+from pathlib import Path
+from src.orchestrators.metrics_runner import run_experiment
+
+run_experiment(
+    "breast_cancer_lr_suite",
+    max_instances=10,
+    output_path=Path("notebooks/notebooks/results_per_instance_breast_cancer_lr_suite.json"),
+)
+```
+
+The runner pulls the dataset/model/explainer/metric configs from `src/configs/*.yml`, instantiates everything, and attaches both per-instance and batch metrics using the capability metadata each evaluator now exposes.
+
 ## Current Explainers
 
 ### SHAP (`shap_default`)
@@ -33,9 +50,10 @@ The current correctness metric follows the deletion check from “From Anecdotal
 ### 3. CONSISTENCY
 
 ### 4. CONTINUITY
-Continuity currently reuses the stability-for-slight-variations test (Co-12 Section 6.4). For a handful of instances we apply a tiny Gaussian perturbation to the feature vector (noise is scaled by training-set standard deviation when available), re-run the explainer on the perturbed instance, and compute the absolute correlation between the perturbed and original attribution vectors. Averaging those correlations yields the `continuity_stability` score—values close to 1 indicate explanations remain smooth under small input changes. Config knobs: `max_instances` (how many explanations to perturb), `noise_scale` (perturbation magnitude), and `random_state`.
+Continuity reuses the stability-for-slight-variations test (Co-12 Section 6.4). For each explanation we sample a tiny Gaussian perturbation (noise is scaled by training-set standard deviation when available), re-run the explainer on the perturbed instance, and compute the absolute correlation between the perturbed and original attribution vectors. Scores live on \[0, 1]; values near 1 mean the explanation barely changes under small input noise. The evaluator now supports both per-instance reporting (when `current_index` is provided) and batch-level summaries. Config knobs: `max_instances` (how many explanations to perturb when aggregating), `noise_scale` (perturbation magnitude), and `random_state`.
 
 ### 5. CONTRASTIVITY
+`ContrastivityEvaluator` (`src/evaluators/contrastivity.py`) adapts the Random Logit / target-sensitivity metric popularised by Sixt et al. (2020) and the Quantus library: for each explanation it randomly samples off-class references, measures Structural Similarity (SSIM) between attribution vectors, and reports `1 - SSIM` so higher values mean stronger disagreement across classes. The evaluator supports per-instance use (anchoring the comparisons on the requested explanation) as well as batch aggregates. Parameters: `pairs_per_instance` controls how many off-class references to sample per explanation, `similarity_func` allows swapping the SSIM variant, and `normalise` toggles L1 normalisation before similarity is computed.
 
 ### 6. COVARIATE COMPLEXITY
 Covariate complexity from Co-12 Section 6.6 is implemented by `CovariateComplexityEvaluator` (`src/evaluators/covariate_complexity.py`). It iterates over each instance’s attribution vector, converts magnitudes into a probability distribution, and reports the normalized Shannon entropy (`covariate_complexity`) plus its complement (`covariate_regularity`). Enable it through the `covariate_complexity` entry in `src/configs/metrics.yml`; all bundled experiment suites request it so the new scores automatically appear next to correctness, continuity, and compactness.

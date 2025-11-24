@@ -7,6 +7,7 @@ tabular_demo_suite:
   metrics:
     - correctness
     - monotonicity_correlation
+    - infidelity
     - completeness_deletion
     - compactness_size
     - covariate_complexity
@@ -22,6 +23,7 @@ breast_cancer_rf_suite:
   metrics:
     - correctness
     - monotonicity_correlation
+    - infidelity
     - completeness_deletion
     - compactness_size
     - covariate_complexity
@@ -41,6 +43,7 @@ breast_cancer_lr_suite:
   metrics:
     - correctness
     - monotonicity_correlation
+    - infidelity
     - continuity_stability
     - completeness_deletion
     - compactness_size

@@ -87,6 +87,17 @@ monotonicity_correlation:
     normalise: true
     noise_scale: 0.0
 
+infidelity:
+  module: src.evaluators.infidelity
+  class: InfidelityEvaluator
+  params:
+    n_perturb_samples: 32
+    features_per_sample: 3
+    default_baseline: 0.0
+    abs_attributions: false
+    normalise: false
+    noise_scale: 0.0
+
 confidence:
   module: src.evaluators.confidence
   class: ConfidenceEvaluator

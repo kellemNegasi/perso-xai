@@ -7,6 +7,7 @@ from .consistency import ConsistencyEvaluator
 from .contrastivity import ContrastivityEvaluator
 from .confidence import ConfidenceEvaluator
 from .non_sensitivity import NonSensitivityEvaluator
+from .relative_stability import RelativeInputStabilityEvaluator
 
 __all__ = [
     "CorrectnessEvaluator",
@@ -18,4 +19,5 @@ __all__ = [
     "ContrastivityEvaluator",
     "ConfidenceEvaluator",
     "NonSensitivityEvaluator",
+    "RelativeInputStabilityEvaluator",
 ]

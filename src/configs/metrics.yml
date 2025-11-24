@@ -42,6 +42,16 @@ completeness_deletion:
     random_trials: 10
     default_baseline: 0.0
 
+relative_input_stability:
+  module: src.evaluators.relative_stability
+  class: RelativeInputStabilityEvaluator
+  params:
+    metric_key: relative_input_stability
+    max_instances: 5
+    num_samples: 10
+    noise_scale: 0.01
+    eps_min: 1.0e-06
+
 consistency_local:
   module: src.evaluators.consistency
   class: ConsistencyEvaluator

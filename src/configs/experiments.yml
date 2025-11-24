@@ -44,3 +44,4 @@ breast_cancer_lr_suite:
     - confidence
     - non_sensitivity
     - consistency_local
+    - relative_input_stability

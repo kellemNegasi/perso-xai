@@ -70,13 +70,13 @@ class SHAPExplainer(BaseExplainer):
 
         # Compute SHAP values
         if self._is_tree:
-            shap_vals_raw, t_shap = self._timeit(self._explainer.shap_values, inst2d)
+            shap_vals_raw, t_shap = self._timeit(self._explainer.shap_values, inst2d, silent=True)
             shap_vals = self._select_shap_values(shap_vals_raw, pred)
             expected = self._explainer.expected_value
             exp_val = self._select_expected_value(expected, pred)
         else:
             # KernelExplainer expects small batches; just one instance
-            shap_vals_raw, t_shap = self._timeit(self._explainer.shap_values, inst2d)
+            shap_vals_raw, t_shap = self._timeit(self._explainer.shap_values, inst2d,silent=True)
             shap_vals = self._select_shap_values(shap_vals_raw, pred)
             expected = self._explainer.expected_value
             exp_val = self._select_expected_value(expected, pred)

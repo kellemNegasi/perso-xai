@@ -42,3 +42,4 @@ breast_cancer_lr_suite:
     - covariate_complexity
     - contrastivity_ssim
     - confidence
+    - non_sensitivity

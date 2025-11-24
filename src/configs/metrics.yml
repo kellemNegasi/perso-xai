@@ -42,6 +42,15 @@ completeness_deletion:
     random_trials: 10
     default_baseline: 0.0
 
+non_sensitivity:
+  module: src.evaluators.non_sensitivity
+  class: NonSensitivityEvaluator
+  params:
+    zero_threshold: 1.0e-05
+    delta_tolerance: 1.0e-04
+    features_per_step: 1
+    default_baseline: 0.0
+
 contrastivity_ssim:
   module: src.evaluators.contrastivity
   class: ContrastivityEvaluator

@@ -5,6 +5,7 @@ from .covariate_complexity import CovariateComplexityEvaluator
 from .completeness import CompletenessEvaluator
 from .contrastivity import ContrastivityEvaluator
 from .confidence import ConfidenceEvaluator
+from .non_sensitivity import NonSensitivityEvaluator
 
 __all__ = [
     "CorrectnessEvaluator",
@@ -14,4 +15,5 @@ __all__ = [
     "CompletenessEvaluator",
     "ContrastivityEvaluator",
     "ConfidenceEvaluator",
+    "NonSensitivityEvaluator",
 ]

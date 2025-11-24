@@ -6,6 +6,7 @@ from .completeness import CompletenessEvaluator
 from .consistency import ConsistencyEvaluator
 from .contrastivity import ContrastivityEvaluator
 from .confidence import ConfidenceEvaluator
+from .monotonicity import MonotonicityEvaluator
 from .non_sensitivity import NonSensitivityEvaluator
 from .relative_stability import RelativeInputStabilityEvaluator
 
@@ -18,6 +19,7 @@ __all__ = [
     "ConsistencyEvaluator",
     "ContrastivityEvaluator",
     "ConfidenceEvaluator",
+    "MonotonicityEvaluator",
     "NonSensitivityEvaluator",
     "RelativeInputStabilityEvaluator",
 ]

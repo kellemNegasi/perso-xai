@@ -76,6 +76,17 @@ contrastivity_ssim:
     normalise: true
     similarity_func: src.evaluators.utils.structural_similarity
 
+monotonicity_correlation:
+  module: src.evaluators.monotonicity
+  class: MonotonicityEvaluator
+  params:
+    nr_samples: 5
+    features_in_step: 1
+    default_baseline: 0.0
+    abs_attributions: true
+    normalise: true
+    noise_scale: 0.0
+
 confidence:
   module: src.evaluators.confidence
   class: ConfidenceEvaluator

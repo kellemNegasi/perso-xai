@@ -6,6 +6,7 @@ tabular_demo_suite:
     - lime_default
   metrics:
     - correctness
+    - monotonicity_correlation
     - completeness_deletion
     - compactness_size
     - covariate_complexity
@@ -20,6 +21,7 @@ breast_cancer_rf_suite:
     - causal_shap_default
   metrics:
     - correctness
+    - monotonicity_correlation
     - completeness_deletion
     - compactness_size
     - covariate_complexity
@@ -38,6 +40,7 @@ breast_cancer_lr_suite:
     progress: true
   metrics:
     - correctness
+    - monotonicity_correlation
     - continuity_stability
     - completeness_deletion
     - compactness_size

@@ -4,7 +4,7 @@ Integrated Gradients explainer for tabular data.
 
 from __future__ import annotations
 
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, Optional, Tuple, List
 
 import numpy as np
 

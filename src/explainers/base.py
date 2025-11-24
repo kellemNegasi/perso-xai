@@ -15,6 +15,7 @@ try:
     import pandas as pd
     _HAS_PANDAS = True
 except Exception:
+    logging.getLogger(__name__).debug("pandas not available, skipping related support.")
     _HAS_PANDAS = False
 
 

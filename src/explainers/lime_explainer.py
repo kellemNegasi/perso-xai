@@ -80,11 +80,12 @@ class LIMEExplainer(BaseExplainer):
             metadata=metadata,
             per_instance_time=t_lime + t_pred,
         )
-    def explain_batch(self, X):
+    def explain_batch(self, X: ArrayLike) -> List[Dict[str, Any]]:
         """
-        Runs Lime over a batch by sharing preprocessing/prediction while still generating per-instance explanations.
+        Runs LIME over a batch by sharing preprocessing/prediction while still
+        generating per-instance explanations.
         """
-        X_np = self._coerce_X_y
+        X_np, _ = self._coerce_X_y(X, None)
         preds = np.asarray(self._predict(X_np))
         proba = self._predict_proba(X_np)
         baseline_prediction = None

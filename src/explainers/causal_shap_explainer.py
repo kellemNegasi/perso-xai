@@ -83,7 +83,10 @@ class CausalSHAPExplainer(BaseExplainer):
         for idx, inst_vec in enumerate(X_np):
             X_train = self._ensure_training_data(inst_vec)
             feature_names = self._infer_feature_names(inst_vec)
-            attributions, info = self._causal_shap(inst_vec, X_train, feature_names, feature_names)
+            causal_graph = self._infer_causal_structure(X_train, feature_names)
+            attributions, info = self._causal_shap(
+                inst_vec, X_train, causal_graph, feature_names
+            )
 
             pred_row = np.asarray(preds[idx]).ravel()
             pred_value = float(pred_row[0]) if pred_row.size else float(pred_row)
@@ -93,7 +96,7 @@ class CausalSHAPExplainer(BaseExplainer):
                 proba_value = np.asarray(proba[idx])
 
             metadata = {
-                "causal_graph": info["causal_graph"] if "causal_graph" in info else self._infer_causal_structure(X_train, feature_names),
+                "causal_graph": causal_graph,
                 "coalition_samples": info["coalition_samples"],
                 "correlation_threshold": info["correlation_threshold"],
             }

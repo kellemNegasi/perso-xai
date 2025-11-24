@@ -34,6 +34,8 @@ breast_cancer_lr_suite:
     - causal_shap_default
     - lime_default
     - integrated_gradients_default
+  logging:
+    progress: true
   metrics:
     - correctness
     - continuity_stability

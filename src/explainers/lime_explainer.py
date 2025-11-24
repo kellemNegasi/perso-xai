@@ -4,7 +4,7 @@ LIME explainer specialized for local explanations on tabular data.
 
 from __future__ import annotations
 
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, Optional, Tuple, List
 
 import numpy as np
 from sklearn.linear_model import Ridge
@@ -80,6 +80,48 @@ class LIMEExplainer(BaseExplainer):
             metadata=metadata,
             per_instance_time=t_lime + t_pred,
         )
+    def explain_batch(self, X):
+        """
+        Runs Lime over a batch by sharing preprocessing/prediction while still generating per-instance explanations.
+        """
+        X_np = self._coerce_X_y
+        preds = np.asarray(self._predict(X_np))
+        proba = self._predict_proba(X_np)
+        baseline_prediction = None
+        if self._train_mean is not None:
+            baseline_prediction = float(
+                np.asarray(self._predict(self._train_mean.reshape(1, -1))).ravel()[0]
+            )
+        results: List[Dict[str, Any]] = []
+        for idx, inst_vec in enumerate(X_np):
+            self._ensure_training_cache(inst_vec)
+            attributions, info = self._generate_local_explanation(inst_vec)
+
+            pred_row = np.asarray(preds[idx]).ravel()
+            pred_value = float(pred_row[0]) if pred_row.size else float(pred_row)
+
+            proba_value = None
+            if proba is not None:
+                proba_value = np.asarray(proba[idx])
+
+            metadata = {
+                "baseline_prediction": baseline_prediction,
+                "num_samples": info["num_samples"],
+                "kernel_width": info["kernel_width"],
+                "noise_scale": info["noise_scale"],
+            }
+
+            results.append(
+                self._standardize_explanation_output(
+                    attributions=attributions.tolist(),
+                    instance=inst_vec,
+                    prediction=pred_value,
+                    prediction_proba=proba_value,
+                    metadata=metadata,
+                    per_instance_time=0.0,
+                )
+            )
+        return results
 
     # ------------------------------------------------------------------ #
     # Internal helpers

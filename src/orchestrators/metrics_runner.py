@@ -5,8 +5,9 @@ Experiment runner that instantiates datasets/models/explainers and computes metr
 from __future__ import annotations
 
 import json
+import logging
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional
+from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 
 import numpy as np
 
@@ -20,6 +21,8 @@ from .utils import (
     metric_capabilities,
     to_serializable,
 )
+
+LOGGER = logging.getLogger(__name__)
 
 
 def run_experiment(
@@ -46,6 +49,9 @@ def run_experiment(
         Nested experiment result ready for JSON serialization.
     """
     exp_cfg = EXPERIMENT_CFG[experiment_name]
+    logging_cfg = exp_cfg.get("logging", {}) or {}
+    log_progress = bool(logging_cfg.get("progress"))
+
     dataset_name = exp_cfg["dataset"]
     model_name = exp_cfg["model"]
     explainer_names = exp_cfg.get("explainers") or [exp_cfg["explainer"]]
@@ -70,7 +76,11 @@ def run_experiment(
 
     explainer_outputs: Dict[str, Dict[str, Any]] = {}
     for expl_name in explainer_names:
-        explainer = instantiate_explainer(expl_name, model, dataset)
+        if log_progress:
+            LOGGER.info("Running %s explainer", expl_name)
+        explainer = instantiate_explainer(
+            expl_name, model, dataset, logging_cfg=logging_cfg
+        )
         expl_results = explainer.explain_dataset(X_eval, y_eval)
 
         batch_metrics: Dict[str, float] = {}
@@ -78,6 +88,8 @@ def run_experiment(
             caps = metric_caps[metric_name]
             if caps["per_instance"] or not caps["requires_full_batch"]:
                 continue
+            if log_progress:
+                LOGGER.info("Running %s metric (batch) for %s", metric_name, expl_name)
             out = metric.evaluate(
                 model=model,
                 explanation_results=expl_results,
@@ -94,6 +106,8 @@ def run_experiment(
 
     instances: List[Dict[str, Any]] = []
     n_instances = len(X_eval)
+
+    announced_metrics: Set[Tuple[str, str]] = set()
 
     for idx in range(n_instances):
         inst_record: Dict[str, Any] = {
@@ -115,6 +129,14 @@ def run_experiment(
                 caps = metric_caps[metric_name]
                 if not caps["per_instance"]:
                     continue
+                key = (metric_name, expl_name)
+                if log_progress and key not in announced_metrics:
+                    LOGGER.info(
+                        "Running %s metric (per-instance) for %s",
+                        metric_name,
+                        expl_name,
+                    )
+                    announced_metrics.add(key)
                 payload = dict(expl_results)
                 payload["current_index"] = idx
                 out = metric.evaluate(

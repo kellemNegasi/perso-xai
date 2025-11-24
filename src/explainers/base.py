@@ -57,6 +57,12 @@ class BaseExplainer(ABC):
         # Cache commonly-used config paths
         self._exp_cfg = self.config.get("experiment", {}) or {}
         self._expl_cfg = self._exp_cfg.get("explanation", {}) or {}
+        self._log_cfg = self._exp_cfg.get("logging", {}) or {}
+        self._log_progress = bool(
+            self.config.get("log_progress")
+            or self._exp_cfg.get("log_progress")
+            or self._log_cfg.get("progress")
+        )
 
         # Seed (if provided) for any stochastic explainers
         self.random_state: Optional[int] = self._expl_cfg.get("random_state")
@@ -116,10 +122,24 @@ class BaseExplainer(ABC):
         X_np, y_np = self._coerce_X_y(X, y)
         X_np, y_np = self._limit_samples(X_np, y_np)
 
+        if self._log_progress:
+            self.logger.info(
+                "Running %s explanations on %d instances",
+                self.config.get("type", self.__class__.__name__),
+                len(X_np),
+            )
+
         explanations = self.explain_batch(X_np)
 
         total_time = time.time() - start_all
         self.generation_time = total_time
+
+        if self._log_progress:
+            self.logger.info(
+                "Finished %s explanations in %.2fs",
+                self.config.get("type", self.__class__.__name__),
+                total_time,
+            )
 
         return {
             "method": self.config.get("type", self.__class__.__name__),

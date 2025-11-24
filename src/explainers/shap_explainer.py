@@ -94,6 +94,46 @@ class SHAPExplainer(BaseExplainer):
         )
         return result
 
+    def explain_batch(self, X: ArrayLike) -> List[Dict[str, Any]]:
+        """
+        Vectorized batch explanation: runs SHAP once on the whole batch and
+        standardizes each row back into the usual per-instance dict format.
+        """
+        X_np, _ = self._coerce_X_y(X, None)
+
+        # If SHAP isn't ready (missing install or not fit yet), degrade gracefully.
+        if self._shap is None or self._explainer is None:
+            return super().explain_batch(X_np)
+
+        preds = np.asarray(self._predict(X_np))
+        proba = self._predict_proba(X_np)
+        shap_vals_raw = self._explainer.shap_values(X_np, silent=True)
+        shap_vals = self._select_shap_values(shap_vals_raw, preds)
+        expected = self._explainer.expected_value
+
+        results: List[Dict[str, Any]] = []
+        for idx in range(len(X_np)):
+            instance = X_np[idx]
+            pred_val = preds[idx] if preds.ndim else preds
+            proba_val = None
+            if proba is not None:
+                proba_val = proba[idx] if proba.ndim > 1 else proba
+            exp_val = self._select_expected_value(expected, np.asarray(preds[idx : idx + 1]))
+            attr_row = shap_vals[idx] if shap_vals.ndim > 1 else shap_vals
+            results.append(
+                self._standardize_explanation_output(
+                    attributions=np.asarray(attr_row).tolist(),
+                    instance=instance,
+                    prediction=pred_val,
+                    prediction_proba=proba_val,
+                    feature_names=self._infer_feature_names(instance),
+                    metadata={"expected_value": exp_val},
+                    per_instance_time=0.0,
+                )
+            )
+        return results
+
+
     # -------------------------------------------------------------------------
     # Helpers
     # -------------------------------------------------------------------------

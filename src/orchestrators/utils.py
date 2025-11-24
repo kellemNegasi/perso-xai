@@ -4,6 +4,7 @@ Shared helpers for experiment orchestration (config loading, factories, serializ
 
 from __future__ import annotations
 
+import copy
 import importlib
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -119,10 +120,21 @@ def instantiate_model(name: str):
     return model_cls(**params)
 
 
-def instantiate_explainer(name: str, model: Any, dataset: TabularDataset):
+def instantiate_explainer(
+    name: str,
+    model: Any,
+    dataset: TabularDataset,
+    *,
+    logging_cfg: Optional[Dict[str, Any]] = None,
+):
     spec = EXPLAINER_CFG[name]
     config = {"type": spec["type"]}
-    config.update(spec.get("params", {}) or {})
+    params = copy.deepcopy(spec.get("params", {}) or {})
+    config.update(params)
+    if logging_cfg:
+        experiment_cfg = config.setdefault("experiment", {})
+        current_logging = experiment_cfg.get("logging", {}) or {}
+        experiment_cfg["logging"] = {**current_logging, **logging_cfg}
     explainer = make_explainer(config=config, model=model, dataset=dataset)
     explainer.fit(dataset.X_train, dataset.y_train)
     return explainer

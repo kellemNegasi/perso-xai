@@ -43,3 +43,4 @@ breast_cancer_lr_suite:
     - contrastivity_ssim
     - confidence
     - non_sensitivity
+    - consistency_local

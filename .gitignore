@@ -18,6 +18,9 @@ wheels/
 .DS_Store
 Thumbs.db
 
+# Ensure CI workflows stay tracked
+!.github/
+
 # Logs / temporary
 *.log
 *.tmp

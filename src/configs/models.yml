@@ -21,3 +21,87 @@ logistic_regression:
     random_state: 42
   fit:
     requires_scaler: true
+
+gradient_boosting:
+  description: "Gradient Boosting classifier for structured data."
+  module: sklearn.ensemble
+  class: GradientBoostingClassifier
+  params:
+    n_estimators: 100
+    learning_rate: 0.1
+    max_depth: 3
+    random_state: 42
+  fit:
+    requires_scaler: false
+
+hist_gradient_boosting:
+  description: "Histogram-based Gradient Boosting for larger tabular datasets."
+  module: sklearn.ensemble
+  class: HistGradientBoostingClassifier
+  params:
+    learning_rate: 0.1
+    max_iter: 100
+    max_depth: null
+    random_state: 42
+  fit:
+    requires_scaler: false
+
+extra_trees:
+  description: "Extremely Randomized Trees ensemble as a variance-reduced baseline."
+  module: sklearn.ensemble
+  class: ExtraTreesClassifier
+  params:
+    n_estimators: 300
+    max_depth: null
+    random_state: 42
+  fit:
+    requires_scaler: false
+
+svm_linear:
+  description: "Linear-kernel SVM with probability calibration."
+  module: sklearn.svm
+  class: SVC
+  params:
+    kernel: linear
+    C: 1.0
+    gamma: scale
+    probability: true
+    random_state: 42
+  fit:
+    requires_scaler: true
+
+svm_rbf:
+  description: "RBF-kernel SVM for non-linear decision boundaries."
+  module: sklearn.svm
+  class: SVC
+  params:
+    kernel: rbf
+    C: 1.0
+    gamma: scale
+    probability: true
+    random_state: 42
+  fit:
+    requires_scaler: true
+
+mlp_classifier:
+  description: "Feed-forward neural network with ReLU activations."
+  module: sklearn.neural_network
+  class: MLPClassifier
+  params:
+    hidden_layer_sizes: [100]
+    activation: relu
+    solver: adam
+    alpha: 0.0001
+    learning_rate: constant
+    max_iter: 200
+    random_state: 42
+  fit:
+    requires_scaler: true
+
+gaussian_nb:
+  description: "Gaussian Naive Bayes for quick probabilistic baselines."
+  module: sklearn.naive_bayes
+  class: GaussianNB
+  params: {}
+  fit:
+    requires_scaler: true

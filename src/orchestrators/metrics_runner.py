@@ -74,6 +74,7 @@ def run_experiment(
     metric_objs = {name: instantiate_metric(name) for name in metric_names}
     metric_caps = {name: metric_capabilities(metric) for name, metric in metric_objs.items()}
 
+    # Compute the explanations and batch-level metrics first.
     explainer_outputs: Dict[str, Dict[str, Any]] = {}
     for expl_name in explainer_names:
         if log_progress:
@@ -104,11 +105,10 @@ def run_experiment(
             "batch_metrics": batch_metrics,
         }
 
+    # Collect per-instance metrics and assemble the final output structure.
     instances: List[Dict[str, Any]] = []
     n_instances = len(X_eval)
-
     announced_metrics: Set[Tuple[str, str]] = set()
-
     for idx in range(n_instances):
         inst_record: Dict[str, Any] = {
             "index": int(idx),
@@ -216,6 +216,8 @@ def run_experiments(
 
 
 def _coerce_metric_dict(values: Optional[Dict[str, Any]]) -> Dict[str, float]:
+    # Sanitize metric output to ensure all values are floats.
+    # If there are nones or non-coercible values, they are skipped.
     if not values:
         return {}
     coerced: Dict[str, float] = {}

@@ -6,6 +6,7 @@ Focuses on the Size family from Co-12 Section 6.7:
     • Sparsity (fraction of near-zero attributions)
     • Top-k coverage (importance mass captured by top 5 / top 10 features)
     • Effective feature count (inverse participation ratio, normalized)
+Adapted from:  https://github.com/umberH/benchmarking  CompactnessEvaluator.
 """
 
 from __future__ import annotations
@@ -30,7 +31,6 @@ _FEATURE_METHOD_KEYS = {
 class CompactnessEvaluator(MetricCapabilities):
     """
     Aggregates Size-style compactness indicators for feature attributions.
-
     Parameters
     ----------
     zero_tolerance : float, optional
@@ -203,8 +203,9 @@ class CompactnessEvaluator(MetricCapabilities):
             top10 = float(np.sum(normalized[: min(10, n_features)]))
 
             prob_dist = imp / total
-            participation = float(np.sum(prob_dist ** 2))
-            effective_count = 1.0 / participation if participation > 0.0 else float(n_features)
+            participation = float(np.sum(prob_dist ** 2)) # Inverse Participation Ratio, 
+            # Measure effectivens as the inverse of aprticipation. The hihher the participation, the lower the effective features.
+            effective_count = 1.0 / participation if participation > 0.0 else float(n_features) 
 
             if n_features == 1:
                 effective = 1.0

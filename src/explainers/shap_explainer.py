@@ -5,6 +5,7 @@ Depends on BaseExplainer from src.explainers.base.
 
 from __future__ import annotations
 
+import time
 import numpy as np
 from typing import Any, Dict, List, Optional
 
@@ -101,10 +102,14 @@ class SHAPExplainer(BaseExplainer):
         """
         X_np, _ = self._coerce_X_y(X, None)
 
+        if len(X_np) == 0:
+            return []
+
         # If SHAP isn't ready (missing install or not fit yet), degrade gracefully.
         if self._shap is None or self._explainer is None:
             return super().explain_batch(X_np)
 
+        batch_start = time.time()
         preds = np.asarray(self._predict(X_np))
         proba = self._predict_proba(X_np)
         shap_vals_raw = self._explainer.shap_values(X_np, silent=True)
@@ -131,6 +136,10 @@ class SHAPExplainer(BaseExplainer):
                     per_instance_time=0.0,
                 )
             )
+        total_time = time.time() - batch_start
+        avg_time = total_time / len(results) if results else 0.0
+        for record in results:
+            record["generation_time"] = avg_time
         return results
 
 

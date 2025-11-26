@@ -4,6 +4,7 @@ Causal SHAP explainer for tabular data.
 
 from __future__ import annotations
 
+import time
 from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
@@ -76,6 +77,11 @@ class CausalSHAPExplainer(BaseExplainer):
         runs its causal-SHAP sampling.
         """
         X_np, _ = self._coerce_X_y(X, None)
+
+        if len(X_np) == 0:
+            return []
+
+        batch_start = time.time()
         preds = np.asarray(self._predict(X_np))
         proba = self._predict_proba(X_np)
 
@@ -112,6 +118,10 @@ class CausalSHAPExplainer(BaseExplainer):
                     per_instance_time=0.0,
                 )
             )
+        total_time = time.time() - batch_start
+        avg_time = total_time / len(results) if results else 0.0
+        for record in results:
+            record["generation_time"] = avg_time
         return results
 
     # ------------------------------------------------------------------ #

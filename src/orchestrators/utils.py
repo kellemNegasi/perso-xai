@@ -17,6 +17,7 @@ from sklearn.preprocessing import StandardScaler
 
 from src.datasets import TabularDataset
 from src.explainers import make_explainer
+from src.models import SklearnModel
 
 CONFIG_DIR = Path(__file__).resolve().parents[1] / "configs"
 
@@ -104,20 +105,23 @@ def instantiate_dataset(name: str) -> TabularDataset:
     )
 
 
-def instantiate_model(name: str):
+def instantiate_model(name: str) -> SklearnModel:
     spec = MODEL_CFG[name]
     model_cls = _import_object(spec["module"], spec["class"])
     params = spec.get("params", {}) or {}
     requires_scaler = spec.get("fit", {}).get("requires_scaler", False)
 
     if requires_scaler:
-        return Pipeline(
+        estimator = Pipeline(
             [
                 ("scaler", StandardScaler()),
                 ("estimator", model_cls(**params)),
             ]
         )
-    return model_cls(**params)
+    else:
+        estimator = model_cls(**params)
+
+    return SklearnModel(name=name, estimator=estimator)
 
 
 def instantiate_explainer(

@@ -4,3 +4,5 @@ PYTHON ?= python3
 
 test tests test-evaluators:
 	$(PYTHON) -m pytest tests/evaluators
+test models:
+	$(PYTHON) -m pytest tests/models

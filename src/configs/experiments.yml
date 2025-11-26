@@ -1,3 +1,23 @@
+openml_benchmark_defaults: &openml_benchmark_defaults
+  explainers:
+    - shap_default
+    - lime_default
+    - integrated_gradients_default
+    - causal_shap_default
+  metrics:
+    - correctness
+    - monotonicity_correlation
+    - infidelity
+    - continuity_stability
+    - completeness_deletion
+    - compactness_size
+    - covariate_complexity
+    - contrastivity_ssim
+    - confidence
+    - non_sensitivity
+    - consistency_local
+    - relative_input_stability
+
 tabular_demo_suite:
   dataset: tabular_toy
   model: random_forest
@@ -53,3 +73,27 @@ breast_cancer_lr_suite:
     - non_sensitivity
     - consistency_local
     - relative_input_stability
+
+openml_adult_suite:
+  dataset: openml_adult_income
+  models:
+    - random_forest
+    - hist_gradient_boosting
+    - svm_rbf
+  <<: *openml_benchmark_defaults
+
+openml_bank_suite:
+  dataset: openml_bank_marketing
+  models:
+    - random_forest
+    - hist_gradient_boosting
+    - svm_rbf
+  <<: *openml_benchmark_defaults
+
+openml_german_suite:
+  dataset: openml_german_credit
+  models:
+    - random_forest
+    - hist_gradient_boosting
+    - svm_rbf
+  <<: *openml_benchmark_defaults

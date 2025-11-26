@@ -30,6 +30,7 @@ def run_experiment(
     *,
     max_instances: Optional[int] = None,
     output_path: Optional[str | Path] = None,
+    model_override: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Execute a configured experiment (dataset/model/explainers/metrics).
@@ -53,7 +54,17 @@ def run_experiment(
     log_progress = bool(logging_cfg.get("progress"))
 
     dataset_name = exp_cfg["dataset"]
-    model_name = exp_cfg["model"]
+    configured_models = exp_cfg.get("models")
+    if model_override is not None:
+        model_name = model_override
+    elif configured_models:
+        if len(configured_models) != 1:
+            raise ValueError(
+                "Experiment defines multiple models; provide model_override or use run_experiments."
+            )
+        model_name = configured_models[0]
+    else:
+        model_name = exp_cfg["model"]
     explainer_names = exp_cfg.get("explainers") or [exp_cfg["explainer"]]
     metric_names = exp_cfg.get("metrics", [])
 
@@ -69,7 +80,8 @@ def run_experiment(
             y_eval = y_eval[: max_instances]
 
     y_pred = model.predict(X_eval)
-    y_proba = model.predict_proba(X_eval) if hasattr(model, "predict_proba") else None
+    supports_proba = getattr(model, "supports_proba", hasattr(model, "predict_proba"))
+    y_proba = model.predict_proba(X_eval) if supports_proba else None
 
     metric_objs = {name: instantiate_metric(name) for name in metric_names}
     metric_caps = {name: metric_capabilities(metric) for name, metric in metric_objs.items()}
@@ -206,12 +218,23 @@ def run_experiments(
     output_path = Path(output_dir) if output_dir is not None else None
 
     for name in experiment_names:
-        experiment_result = run_experiment(
-            name,
-            max_instances=max_instances,
-            output_path=(output_path / f"{name}.json") if output_path else None,
-        )
-        results.append(experiment_result)
+        exp_cfg = EXPERIMENT_CFG[name]
+        model_list = list(exp_cfg.get("models") or [])
+        if not model_list:
+            model_list = [exp_cfg["model"]]
+
+        for model_name in model_list:
+            file_path = None
+            if output_path is not None:
+                suffix = f"{name}__{model_name}" if len(model_list) > 1 else name
+                file_path = output_path / f"{suffix}.json"
+            experiment_result = run_experiment(
+                name,
+                max_instances=max_instances,
+                output_path=file_path,
+                model_override=model_name,
+            )
+            results.append(experiment_result)
     return results
 
 

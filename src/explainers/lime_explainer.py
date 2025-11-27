@@ -55,7 +55,7 @@ class LIMEExplainer(BaseExplainer):
 
         baseline_prediction = None
         if self._train_mean is not None:
-            baseline_prediction = float(
+            baseline_prediction = self._as_float(
                 np.asarray(self._predict(self._train_mean.reshape(1, -1))).ravel()[0]
             )
 
@@ -67,7 +67,8 @@ class LIMEExplainer(BaseExplainer):
         }
 
         pred_array = np.asarray(prediction)
-        pred_value = pred_array[0] if pred_array.ndim > 0 else float(pred_array)
+        raw_pred = pred_array[0] if pred_array.ndim > 0 else pred_array
+        pred_value = self._as_float(raw_pred, default=raw_pred)
 
         proba_value = None
         if prediction_proba is not None:
@@ -96,7 +97,7 @@ class LIMEExplainer(BaseExplainer):
         proba = self._predict_proba(X_np)
         baseline_prediction = None
         if self._train_mean is not None:
-            baseline_prediction = float(
+            baseline_prediction = self._as_float(
                 np.asarray(self._predict(self._train_mean.reshape(1, -1))).ravel()[0]
             )
         results: List[Dict[str, Any]] = []
@@ -105,7 +106,8 @@ class LIMEExplainer(BaseExplainer):
             attributions, info = self._generate_local_explanation(inst_vec)
 
             pred_row = np.asarray(preds[idx]).ravel()
-            pred_value = float(pred_row[0]) if pred_row.size else float(pred_row)
+            base_value = pred_row[0] if pred_row.size else pred_row
+            pred_value = self._as_float(base_value, default=base_value)
 
             proba_value = None
             if proba is not None:
@@ -133,6 +135,14 @@ class LIMEExplainer(BaseExplainer):
         for record in results:
             record["generation_time"] = avg_time
         return results
+
+    @staticmethod
+    def _as_float(value: Any, default: Any | None = None) -> Any:
+        """Attempt to cast ``value`` to float, otherwise return the provided default."""
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return default
 
     # ------------------------------------------------------------------ #
     # Internal helpers
@@ -182,13 +192,7 @@ class LIMEExplainer(BaseExplainer):
         perturbations = np.vstack([instance, perturbations])
 
         preds = np.asarray(self._predict(perturbations))
-        if preds.ndim == 1:
-            target = preds
-        elif preds.ndim == 2 and preds.shape[1] == 1:
-            target = preds.ravel()
-        else:
-            # Multi-output fallback: explain first column
-            target = preds[:, 0]
+        target = self._local_target_vector(perturbations, preds)
 
         distances = np.linalg.norm(perturbations - instance, axis=1)
         weights = np.exp(-(distances ** 2) / (kernel_width ** 2 + 1e-12))
@@ -204,3 +208,45 @@ class LIMEExplainer(BaseExplainer):
             "noise_scale": noise_scale,
         }
         return importance, info
+
+    def _local_target_vector(self, perturbations: np.ndarray, predictions: np.ndarray) -> np.ndarray:
+        """Return numeric targets for the local surrogate regression."""
+        proba = self._predict_proba(perturbations)
+        if proba is not None:
+            proba_arr = np.asarray(proba)
+            if proba_arr.ndim == 1:
+                return proba_arr.reshape(-1)
+            if proba_arr.ndim == 2:
+                if proba_arr.shape[1] == 1:
+                    return proba_arr.ravel()
+                if proba_arr.shape[1] == 2:
+                    return proba_arr[:, 1]
+                idx = self._prediction_indices(predictions)
+                rows = np.arange(len(idx))
+                idx = np.clip(idx, 0, proba_arr.shape[1] - 1)
+                return proba_arr[rows, idx]
+            flat = proba_arr.reshape(proba_arr.shape[0], -1)
+            return flat[:, 0]
+        return self._encode_prediction_labels(predictions)
+
+    def _prediction_indices(self, predictions: np.ndarray) -> np.ndarray:
+        preds = np.asarray(predictions)
+        if preds.ndim > 1 and preds.shape[1] == 1:
+            preds = preds.ravel()
+        classes = getattr(self.model, "classes_", None)
+        if classes is not None:
+            mapping = {cls: idx for idx, cls in enumerate(list(classes))}
+            return np.array([mapping.get(val, 0) for val in preds], dtype=int)
+        if np.issubdtype(preds.dtype, np.number):
+            return preds.astype(int).reshape(-1)
+        _, inverse = np.unique(preds, return_inverse=True)
+        return inverse.astype(int)
+
+    def _encode_prediction_labels(self, predictions: np.ndarray) -> np.ndarray:
+        preds = np.asarray(predictions)
+        if preds.ndim > 1 and preds.shape[1] == 1:
+            preds = preds.ravel()
+        if np.issubdtype(preds.dtype, np.number):
+            return preds.astype(float)
+        indices = self._prediction_indices(predictions)
+        return indices.astype(float)

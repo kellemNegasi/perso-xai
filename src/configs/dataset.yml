@@ -33,7 +33,7 @@ breast_cancer:
 
 #---- OpenML Datasets ----#
 openml_adult_income:
-  description: "Census-Income dataset from OpenML (data_id=46078)."
+  description: "Census-Income dataset from OpenML (data_id=4535)."
   loader:
     module: sklearn.datasets
     factory: fetch_openml

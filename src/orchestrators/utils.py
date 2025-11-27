@@ -21,6 +21,14 @@ from src.models import SklearnModel
 
 CONFIG_DIR = Path(__file__).resolve().parents[1] / "configs"
 
+try:
+    import pandas as pd  # type: ignore
+
+    _HAS_PANDAS = True
+except Exception:  # pragma: no cover - optional dependency
+    pd = None  # type: ignore
+    _HAS_PANDAS = False
+
 
 def _load_config(name: str) -> Dict[str, Any]:
     path = CONFIG_DIR / name
@@ -69,9 +77,17 @@ def instantiate_dataset(name: str) -> TabularDataset:
     feature_names = _maybe_get(obj, "feature_names")
     frame = _maybe_get(obj, "frame")
 
-    if frame is not None:
-        data = frame.drop(columns=[frame.columns[-1]]).values
-        target = frame[frame.columns[-1]].values
+    if frame is not None and _HAS_PANDAS and isinstance(frame, pd.DataFrame):
+        data, target, feature_names = _extract_frame_components(
+            frame,
+            target,
+            feature_names,
+            dataset_spec=spec,
+            loader_params=params,
+        )
+    elif frame is not None:
+        # No pandas support: fallback to numpy conversion.
+        data = frame
 
     split_cfg = params.get("split", spec.get("split", {})) or {}
     test_size = float(split_cfg.get("test_size", 0.25))
@@ -82,8 +98,13 @@ def instantiate_dataset(name: str) -> TabularDataset:
         if unique.size > 1:
             stratify = target
 
+    if data is None:
+        raise ValueError(f"Dataset loader '{name}' did not return feature data")
+
+    X_array, feature_names = _ensure_numeric_features(data, feature_names)
+
     X_train, X_test, y_train, y_test = train_test_split(
-        np.asarray(data),
+        X_array,
         np.asarray(target),
         test_size=test_size,
         random_state=random_state,
@@ -103,6 +124,67 @@ def instantiate_dataset(name: str) -> TabularDataset:
     return TabularDataset.from_arrays(
         X_train, y_train, X_test, y_test, feature_names=feature_names
     )
+
+
+def _extract_frame_components(
+    frame,
+    target,
+    feature_names,
+    *,
+    dataset_spec: Dict[str, Any],
+    loader_params: Dict[str, Any],
+):
+    """Separate feature columns and target from a pandas DataFrame."""
+    if not _HAS_PANDAS:
+        raise RuntimeError("pandas is required to process frame outputs from dataset loaders")
+
+    target_column = (
+        loader_params.get("target_column")
+        or dataset_spec.get("target_column")
+        or (getattr(target, "name", None) if target is not None else None)
+    )
+
+    if target_column is None and "target" in frame.columns:
+        target_column = "target"
+    if target_column is None or target_column not in frame.columns:
+        target_column = frame.columns[-1]
+
+    feature_frame = frame.drop(columns=[target_column], errors="ignore")
+    target_values = target
+    if target_values is None:
+        target_values = frame[target_column]
+
+    feature_names = list(feature_frame.columns)
+    return feature_frame, np.asarray(target_values), feature_names
+
+
+def _ensure_numeric_features(data, feature_names):
+    """Convert feature matrix to a numeric numpy array, encoding categoricals if needed."""
+    if _HAS_PANDAS and isinstance(data, pd.DataFrame):
+        encoded = _encode_categorical_dataframe(data)
+        if feature_names is None or len(encoded.columns) != len(feature_names):
+            feature_names = list(encoded.columns)
+        return encoded.to_numpy(dtype=float, copy=True), feature_names
+
+    array = np.asarray(data)
+    if array.dtype.kind in {"O", "U", "S"}:
+        if not _HAS_PANDAS:
+            raise TypeError("Feature matrix contains non-numeric values but pandas is unavailable")
+        columns = feature_names or [f"feature_{i}" for i in range(array.shape[1])]
+        encoded = _encode_categorical_dataframe(pd.DataFrame(array, columns=columns))
+        feature_names = list(encoded.columns)
+        return encoded.to_numpy(dtype=float, copy=True), feature_names
+
+    return array, feature_names
+
+
+def _encode_categorical_dataframe(df):
+    if not _HAS_PANDAS:
+        raise RuntimeError("pandas is required to encode categorical features")
+    categorical_cols = df.select_dtypes(include=["object", "category"]).columns
+    if not categorical_cols.empty:
+        df = pd.get_dummies(df, columns=list(categorical_cols), dummy_na=False)
+    return df
 
 
 def instantiate_model(name: str) -> SklearnModel:

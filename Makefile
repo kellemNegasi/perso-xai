@@ -1,11 +1,15 @@
 PYTHON ?= python3
 
-.PHONY: test tests test-evaluators run-experiments sanity run-openml-adult-income run-openml-bank-marketing run-openml-german-credit
+.PHONY: test tests test-evaluators test-models test-datasets run-experiments sanity run-openml-adult-income run-openml-bank-marketing run-openml-german-credit
 
-test tests test-evaluators:
+test test-evaluators:
 	$(PYTHON) -m pytest tests/evaluators
-test models:
+
+test-models:
 	$(PYTHON) -m pytest tests/models
+
+test-datasets:
+	$(PYTHON) -m pytest tests/test_dataset_adapters.py
 
 # Example: make run-experiments RUN_EXPERIMENTS="tabular_demo_suite" OUTPUT_DIR=results
 RUN_EXPERIMENTS ?= tabular_demo_suite

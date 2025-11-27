@@ -1,5 +1,8 @@
 tabular_toy:
   description: "Synthetic tabular dataset for smoke tests."
+  adapter:
+    module: src.datasets.adapters
+    class: LoaderDatasetAdapter
   loader:
     module: src.datasets.tabular
     factory: TabularDataset.from_synthetic
@@ -13,6 +16,9 @@ tabular_toy:
 
 uci_adult:
   description: "Adult Income dataset (preprocessed)."
+  adapter:
+    module: src.datasets.adapters
+    class: LoaderDatasetAdapter
   loader:
     module: src.datasets.tabular
     factory: TabularDataset.from_arrays
@@ -22,6 +28,9 @@ uci_adult:
 
 breast_cancer:
   description: "sklearn.datasets.load_breast_cancer wrapped as TabularDataset."
+  adapter:
+    module: src.datasets.adapters
+    class: LoaderDatasetAdapter
   loader:
     module: sklearn.datasets
     factory: load_breast_cancer
@@ -34,6 +43,9 @@ breast_cancer:
 #---- OpenML Datasets ----#
 openml_adult_income:
   description: "Census-Income dataset from OpenML (data_id=4535)."
+  adapter:
+    module: src.datasets.adapters
+    class: LoaderDatasetAdapter
   loader:
     module: sklearn.datasets
     factory: fetch_openml
@@ -47,6 +59,9 @@ openml_adult_income:
 
 openml_bank_marketing:
   description: "Bank Marketing classification dataset from OpenML (data_id=45065)."
+  adapter:
+    module: src.datasets.adapters
+    class: LoaderDatasetAdapter
   loader:
     module: sklearn.datasets
     factory: fetch_openml
@@ -60,6 +75,9 @@ openml_bank_marketing:
 
 openml_german_credit:
   description: "Classifies people described by a set of attributes as good or bad credit risks"
+  adapter:
+    module: src.datasets.adapters
+    class: LoaderDatasetAdapter
   loader:
     module: sklearn.datasets
     factory: fetch_openml

@@ -44,3 +44,24 @@ def test_sklearn_model_without_predict_proba_raises():
     assert model.supports_proba is False
     with pytest.raises(AttributeError):
         model.predict_proba(X[:3])
+
+
+def test_sklearn_model_handles_string_labels_and_predict_numeric():
+    X, y = make_classification(
+        n_samples=150,
+        n_features=6,
+        n_informative=4,
+        random_state=2,
+    )
+    y_str = np.where(y == 1, ">50K", "<=50K")
+    estimator = LogisticRegression(max_iter=200, random_state=2)
+    model = SklearnModel(name="logreg_strings", estimator=estimator)
+
+    model.fit(X, y_str)
+
+    preds = model.predict(X[:5])
+    assert set(preds) <= {"<=50K", ">50K"}
+
+    numeric_preds = model.predict_numeric(X[:5])
+    assert numeric_preds.dtype == float
+    assert set(np.unique(numeric_preds)).issubset({0.0, 1.0})

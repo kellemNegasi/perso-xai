@@ -6,6 +6,7 @@ from typing import Any, Optional
 
 import numpy as np
 from sklearn.ensemble import RandomForestClassifier
+from sklearn.preprocessing import LabelEncoder
 
 from .base import BaseModel
 
@@ -16,13 +17,33 @@ class SklearnModel(BaseModel[Any]):
     def __init__(self, name: str, estimator: Any):
         super().__init__(name=name, estimator=estimator)
         self.supports_proba = hasattr(estimator, "predict_proba")
+        self._label_encoder: Optional[LabelEncoder] = None
 
     def fit(self, X: np.ndarray, y: Optional[np.ndarray] = None) -> "SklearnModel":
-        self._estimator.fit(X, y)
+        y_encoded = y
+        if y is not None:
+            y_arr = np.asarray(y)
+            if y_arr.ndim > 1 and y_arr.shape[1] == 1:
+                y_arr = y_arr.ravel()
+            if _needs_label_encoding(y_arr):
+                encoder = LabelEncoder()
+                y_encoded = encoder.fit_transform(y_arr)
+                self._label_encoder = encoder
+            else:
+                self._label_encoder = None
+                y_encoded = y_arr
+        self._estimator.fit(X, y_encoded)
         return self
 
     def predict(self, X: np.ndarray) -> np.ndarray:
-        return self._estimator.predict(X)
+        preds = self._estimator.predict(X)
+        if self._label_encoder is not None:
+            preds = self._label_encoder.inverse_transform(np.asarray(preds, dtype=int))
+        return preds
+
+    def predict_numeric(self, X: np.ndarray) -> np.ndarray:
+        preds = self._estimator.predict(X)
+        return np.asarray(preds, dtype=float)
 
     def predict_proba(self, X: np.ndarray) -> np.ndarray:
         if not self.supports_proba:
@@ -51,3 +72,9 @@ def train_simple_classifier(
 
 
 __all__ = ["SklearnModel", "train_simple_classifier"]
+
+
+def _needs_label_encoding(y: np.ndarray) -> bool:
+    if y.dtype.kind in {"O", "U", "S"}:
+        return True
+    return False

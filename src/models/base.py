@@ -32,6 +32,10 @@ class BaseModel(ABC, Generic[EstimatorT]):
     def predict(self, X: np.ndarray) -> np.ndarray:
         """Return predictions for ``X``."""
 
+    def predict_numeric(self, X: np.ndarray) -> np.ndarray:
+        """Numeric predictions if available; defaults to ``predict`` output."""
+        return self.predict(X)
+
     def predict_proba(self, X: np.ndarray) -> np.ndarray:
         """Probability predictions when supported by the estimator."""
         raise AttributeError(f"{self.__class__.__name__} does not support predict_proba")

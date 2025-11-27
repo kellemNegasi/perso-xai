@@ -122,8 +122,12 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     if args.model and len(args.experiments) > 1:
         parser.error("--model can only be used when running a single experiment at a time")
-
+    # TODO log the list command line arguments 
+    
     _configure_logging(args.log_level)
+    logger = logging.getLogger(__name__)
+    cli_args = list(argv) if argv is not None else sys.argv[1:]
+    logger.debug("CLI arguments: %s", cli_args)
     output_dir = _ensure_output_dir(args.output_dir)
 
     if args.model:
@@ -140,7 +144,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             output_dir=output_dir,
         )
 
-    logging.getLogger(__name__).info(
+    logger.info(
         "Completed %d experiment run(s). Results directory: %s",
         len(results),
         output_dir if output_dir else "<not written>",

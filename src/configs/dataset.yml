@@ -33,12 +33,12 @@ breast_cancer:
 
 #---- OpenML Datasets ----#
 openml_adult_income:
-  description: "Adult Income classification dataset from OpenML (data_id=1590)."
+  description: "Adult Income classification dataset from OpenML (data_id=46078)."
   loader:
     module: sklearn.datasets
     factory: fetch_openml
   params:
-    data_id: 1590
+    data_id: 46078
     as_frame: true
   split:
     test_size: 0.25
@@ -46,12 +46,12 @@ openml_adult_income:
     stratify: true
 
 openml_bank_marketing:
-  description: "Bank Marketing classification dataset from OpenML (data_id=1461)."
+  description: "Bank Marketing classification dataset from OpenML (data_id=45065)."
   loader:
     module: sklearn.datasets
     factory: fetch_openml
   params:
-    data_id: 1461
+    data_id: 45065
     as_frame: true
   split:
     test_size: 0.2
@@ -59,12 +59,12 @@ openml_bank_marketing:
     stratify: true
 
 openml_german_credit:
-  description: "German Credit risk dataset from OpenML (data_id=31)."
+  description: "German Credit risk dataset from OpenML (data_id=43754)."
   loader:
     module: sklearn.datasets
     factory: fetch_openml
   params:
-    data_id: 31
+    data_id: 43754
     as_frame: true
   split:
     test_size: 0.3

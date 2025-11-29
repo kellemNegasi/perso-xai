@@ -1,4 +1,10 @@
+templates:
+  tabular_explainer: &tabular_explainer
+    supported_data_types:
+      - tabular
+
 shap_default:
+  <<: *tabular_explainer
   type: shap
   description: "Tree/Kernel SHAP with default background size."
   params:
@@ -7,6 +13,7 @@ shap_default:
         background_sample_size: 100
 
 lime_default:
+  <<: *tabular_explainer
   type: lime
   description: "LIME with 500 perturbations."
   params:
@@ -17,6 +24,7 @@ lime_default:
         lime_kernel_width: 2.0
 
 integrated_gradients_default:
+  <<: *tabular_explainer
   type: integrated_gradients
   description: "Finite-difference IG."
   params:
@@ -26,6 +34,7 @@ integrated_gradients_default:
         ig_epsilon: 0.001
 
 causal_shap_default:
+  <<: *tabular_explainer
   type: causal_shap
   description: "Causal SHAP with correlation threshold."
   params:

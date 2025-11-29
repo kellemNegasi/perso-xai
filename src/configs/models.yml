@@ -1,4 +1,10 @@
+templates:
+  tabular_model: &tabular_model
+    supported_data_types:
+      - tabular
+
 random_forest:
+  <<: *tabular_model
   description: "Baseline RandomForest for tabular regression/classification."
   module: sklearn.ensemble
   class: RandomForestClassifier
@@ -10,6 +16,7 @@ random_forest:
     requires_scaler: false
 
 logistic_regression:
+  <<: *tabular_model
   description: "Logistic regression with standard scaling."
   module: sklearn.linear_model
   class: LogisticRegression
@@ -23,6 +30,7 @@ logistic_regression:
     requires_scaler: true
 
 gradient_boosting:
+  <<: *tabular_model
   description: "Gradient Boosting classifier for structured data."
   module: sklearn.ensemble
   class: GradientBoostingClassifier
@@ -35,6 +43,7 @@ gradient_boosting:
     requires_scaler: false
 
 hist_gradient_boosting:
+  <<: *tabular_model
   description: "Histogram-based Gradient Boosting for larger tabular datasets."
   module: sklearn.ensemble
   class: HistGradientBoostingClassifier
@@ -47,6 +56,7 @@ hist_gradient_boosting:
     requires_scaler: false
 
 extra_trees:
+  <<: *tabular_model
   description: "Extremely Randomized Trees ensemble as a variance-reduced baseline."
   module: sklearn.ensemble
   class: ExtraTreesClassifier
@@ -58,6 +68,7 @@ extra_trees:
     requires_scaler: false
 
 svm_linear:
+  <<: *tabular_model
   description: "Linear-kernel SVM with probability calibration."
   module: sklearn.svm
   class: SVC
@@ -71,6 +82,7 @@ svm_linear:
     requires_scaler: true
 
 svm_rbf:
+  <<: *tabular_model
   description: "RBF-kernel SVM for non-linear decision boundaries."
   module: sklearn.svm
   class: SVC
@@ -84,6 +96,7 @@ svm_rbf:
     requires_scaler: true
 
 mlp_classifier:
+  <<: *tabular_model
   description: "Feed-forward neural network with ReLU activations."
   module: sklearn.neural_network
   class: MLPClassifier
@@ -99,6 +112,7 @@ mlp_classifier:
     requires_scaler: true
 
 gaussian_nb:
+  <<: *tabular_model
   description: "Gaussian Naive Bayes for quick probabilistic baselines."
   module: sklearn.naive_bayes
   class: GaussianNB

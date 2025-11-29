@@ -1,90 +1,148 @@
-tabular_toy:
-  description: "Synthetic tabular dataset for smoke tests."
-  adapter:
-    module: src.datasets.adapters
-    class: LoaderDatasetAdapter
-  loader:
-    module: src.datasets.tabular
-    factory: TabularDataset.from_synthetic
-  params:
-    n_samples: 400
-    n_features: 8
-    test_size: 0.25
-    random_state: 42
-    task: classification
-    noise: 0.1
+templates:
+  dataset_defaults: &dataset_defaults
+    adapter:
+      module: src.datasets.adapters
+      class: LoaderDatasetAdapter
+    mandatory: false
+    split: {}
+    validation: {}
+  tabular_dataset: &tabular_dataset
+    <<: *dataset_defaults
+    type: tabular
 
-uci_adult:
-  description: "Adult Income dataset (preprocessed)."
-  adapter:
-    module: src.datasets.adapters
-    class: LoaderDatasetAdapter
-  loader:
-    module: src.datasets.tabular
-    factory: TabularDataset.from_arrays
-  params:
-    source: data/uci_adult.parquet
-    target_column: income
+datasets:
+  tabular_toy:
+    <<: *tabular_dataset
+    source: synthetic_generation
+    mandatory: true
+    description: "Synthetic tabular dataset for smoke tests."
+    loader:
+      module: src.datasets.tabular
+      factory: TabularDataset.from_synthetic
+    loader_params:
+      n_samples: 400
+      n_features: 8
+      test_size: 0.25
+      random_state: 42
+      task: classification
+      noise: 0.1
+    validation:
+      notes: "Used in CI smoke tests to ensure orchestrator wiring."
+      overrides:
+        min_dataset_size: 200
 
-breast_cancer:
-  description: "sklearn.datasets.load_breast_cancer wrapped as TabularDataset."
-  adapter:
-    module: src.datasets.adapters
-    class: LoaderDatasetAdapter
-  loader:
-    module: sklearn.datasets
-    factory: load_breast_cancer
-  wrapper:
-    module: src.datasets.tabular
-    factory: TabularDataset.from_arrays
-  params:
-    as_frame: true
+  uci_adult:
+    <<: *tabular_dataset
+    source: local:data/uci_adult.parquet
+    description: "Adult Income dataset (preprocessed)."
+    loader:
+      module: src.datasets.tabular
+      factory: TabularDataset.from_arrays
+    loader_params:
+      source: data/uci_adult.parquet
+      target_column: income
+    validation:
+      overrides: {}
+      notes: "Relies on preprocessed parquet stored under data/."
 
-#---- OpenML Datasets ----#
-openml_adult_income:
-  description: "Census-Income dataset from OpenML (data_id=4535) ~ 48842K."
-  adapter:
-    module: src.datasets.adapters
-    class: LoaderDatasetAdapter
-  loader:
-    module: sklearn.datasets
-    factory: fetch_openml
-  params:
-    data_id: 4535
-    as_frame: true
-  split:
-    test_size: 0.25
-    random_state: 42
-    stratify: true
+  breast_cancer:
+    <<: *tabular_dataset
+    source: sklearn.datasets.load_breast_cancer
+    mandatory: true
+    description: "sklearn.datasets.load_breast_cancer wrapped as TabularDataset."
+    loader:
+      module: sklearn.datasets
+      factory: load_breast_cancer
+    wrapper:
+      module: src.datasets.tabular
+      factory: TabularDataset.from_arrays
+    loader_params:
+      as_frame: true
+    validation:
+      overrides: {}
+      notes: "Sklearn loader already provides balanced train/test splits."
 
-openml_bank_marketing:
-  description: "Bank Marketing classification dataset from OpenML (data_id=1461) 45211 instances."
-  adapter:
-    module: src.datasets.adapters
-    class: LoaderDatasetAdapter
-  loader:
-    module: sklearn.datasets
-    factory: fetch_openml
-  params:
-    data_id: 1461
-    as_frame: true
-  split:
-    test_size: 0.2
-    random_state: 42
-    stratify: true
+  #---- OpenML Datasets ----#
+  openml_adult_income:
+    <<: *tabular_dataset
+    source: openml:data_id=4535
+    description: "Census-Income dataset from OpenML (data_id=4535) ~ 48842 rows."
+    loader:
+      module: sklearn.datasets
+      factory: fetch_openml
+    loader_params:
+      data_id: 4535
+      as_frame: true
+      cache: true
+      data_home: data/cache/openml
+    split:
+      test_size: 0.25
+      random_state: 42
+      stratify: true
+    wrapper:
+      module: src.datasets.wrappers
+      factory: wrap_openml_adult_income
+    validation:
+      overrides: {}
+      notes: "Leverages OpenML metadata; ensure local cache is warmed."
 
-openml_german_credit:
-  description: "Classifies people described by a set of attributes as good or bad credit risks 1000 instances (data_id=31)."
-  adapter:
-    module: src.datasets.adapters
-    class: LoaderDatasetAdapter
-  loader:
-    module: sklearn.datasets
-    factory: fetch_openml
-  params:
-    data_id: 31
-    as_frame: true
-  split:
-    test_size: 0.3
-    random_state: 42
-    stratify: true
+  openml_bank_marketing:
+    <<: *tabular_dataset
+    source: openml:data_id=1461
+    description: "Bank Marketing classification dataset from OpenML (data_id=1461) 45211 instances."
+    loader:
+      module: sklearn.datasets
+      factory: fetch_openml
+    loader_params:
+      data_id: 1461
+      as_frame: true
+      cache: true
+      data_home: data/cache/openml
+    split:
+      test_size: 0.2
+      random_state: 42
+      stratify: true
+    wrapper:
+      module: src.datasets.wrappers
+      factory: wrap_openml_bank_marketing
+    validation:
+      overrides: {}
+      notes: "Slightly imbalanced; monitor class ratio warnings."
+
+  openml_german_credit:
+    <<: *tabular_dataset
+    source: openml:data_id=31
+    description: "Classifies people described by attributes as good or bad credit risks (data_id=31)."
+    loader:
+      module: sklearn.datasets
+      factory: fetch_openml
+    loader_params:
+      data_id: 31
+      as_frame: true
+      cache: true
+      data_home: data/cache/openml
+    split:
+      test_size: 0.3
+      random_state: 42
+      stratify: true
+    wrapper:
+      module: src.datasets.wrappers
+      factory: wrap_openml_german_credit
+    validation:
+      overrides: {}
+      notes: "Binary classification dataset with ~1k rows."
+
+  open_compas:
+    <<: *tabular_dataset
+    source: openml:data_id=44162
+    description: "ProPublica COMPAS recidivism dataset."
+    loader:
+      module: src.datasets.compas
+      factory: load_compas_dataset
+    loader_params:
+      test_size: 0.3
+      random_state: 42
+      stratify: true
+    validation:
+      overrides: {}
+      notes: "Fairness-critical binary classification dataset."

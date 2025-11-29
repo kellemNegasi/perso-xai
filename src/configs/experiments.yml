@@ -1,9 +1,9 @@
 openml_benchmark_defaults: &openml_benchmark_defaults
   explainers:
-    - shap_default
-    - lime_default
-    - integrated_gradients_default
-    - causal_shap_default
+    - key: shap_default
+    - key: lime_default
+    - key: integrated_gradients_default
+    - key: causal_shap_default
   metrics:
     - correctness
     - monotonicity_correlation
@@ -19,11 +19,13 @@ openml_benchmark_defaults: &openml_benchmark_defaults
     - relative_input_stability
 
 tabular_demo_suite:
-  dataset: tabular_toy
-  model: random_forest
+  dataset:
+    key: tabular_toy
+  model:
+    key: random_forest
   explainers:
-    - shap_default
-    - lime_default
+    - key: shap_default
+    - key: lime_default
   metrics:
     - correctness
     - monotonicity_correlation
@@ -35,11 +37,13 @@ tabular_demo_suite:
     - confidence
 
 breast_cancer_rf_suite:
-  dataset: breast_cancer
-  model: random_forest
+  dataset:
+    key: breast_cancer
+  model:
+    key: random_forest
   explainers:
-    - shap_default
-    - causal_shap_default
+    - key: shap_default
+    - key: causal_shap_default
   metrics:
     - correctness
     - monotonicity_correlation
@@ -51,13 +55,15 @@ breast_cancer_rf_suite:
     - confidence
 
 breast_cancer_lr_suite:
-  dataset: breast_cancer
-  model: logistic_regression
+  dataset:
+    key: breast_cancer
+  model:
+    key: logistic_regression
   explainers:
-    - shap_default
-    - causal_shap_default
-    - lime_default
-    - integrated_gradients_default
+    - key: shap_default
+    - key: causal_shap_default
+    - key: lime_default
+    - key: integrated_gradients_default
   logging:
     progress: true
   metrics:
@@ -75,31 +81,34 @@ breast_cancer_lr_suite:
     - relative_input_stability
 
 openml_adult_suite:
-  dataset: openml_adult_income
+  dataset:
+    key: openml_adult_income
   models:
-    - random_forest
-    - hist_gradient_boosting
-    - svm_rbf
+    - key: random_forest
+    - key: hist_gradient_boosting
+    - key: svm_rbf
   logging:
       progress: true
   <<: *openml_benchmark_defaults
 
 openml_bank_suite:
-  dataset: openml_bank_marketing
+  dataset:
+    key: openml_bank_marketing
   models:
-    - random_forest
-    - hist_gradient_boosting
-    - svm_rbf
+    - key: random_forest
+    - key: hist_gradient_boosting
+    - key: svm_rbf
   logging:
       progress: true
   <<: *openml_benchmark_defaults
 
 openml_german_suite:
-  dataset: openml_german_credit
+  dataset:
+    key: openml_german_credit
   models:
-    - random_forest
-    - hist_gradient_boosting
-    - svm_rbf
+    - key: random_forest
+    - key: hist_gradient_boosting
+    - key: svm_rbf
   logging:
       progress: true
   <<: *openml_benchmark_defaults

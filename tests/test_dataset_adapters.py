@@ -16,11 +16,15 @@ def test_instantiate_dataset_tabular_toy_returns_tabular_dataset():
 
 def test_loader_adapter_handles_dataframe_with_categoricals():
     spec = {
+        "type": "tabular",
+        "source": "tests.helpers.datasets.dataframe_loader",
+        "mandatory": False,
+        "description": "Synthetic dataframe with categorical feature.",
         "loader": {
             "module": "tests.helpers.datasets",
             "factory": "dataframe_loader",
         },
-        "params": {},
+        "loader_params": {},
         "target_column": "income",
         "split": {"test_size": 0.5, "random_state": 1, "stratify": True},
     }
@@ -36,11 +40,15 @@ def test_loader_adapter_handles_dataframe_with_categoricals():
 
 def test_loader_adapter_preserves_array_feature_names():
     spec = {
+        "type": "tabular",
+        "source": "tests.helpers.datasets.simple_array_loader",
+        "mandatory": False,
+        "description": "Simple array loader for adapter tests.",
         "loader": {
             "module": "tests.helpers.datasets",
             "factory": "simple_array_loader",
         },
-        "params": {},
+        "loader_params": {},
         "split": {"test_size": 0.4, "random_state": 0, "stratify": True},
     }
     adapter = LoaderDatasetAdapter(name="dummy_array", spec=spec)

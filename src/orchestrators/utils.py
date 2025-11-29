@@ -18,6 +18,11 @@ from src.datasets import TabularDataset
 from src.datasets.adapters import LoaderDatasetAdapter
 from src.explainers import make_explainer
 from src.models import SklearnModel
+from src.orchestrators.registry import (
+    DatasetRegistry,
+    ExplainerRegistry,
+    ModelRegistry,
+)
 
 CONFIG_DIR = Path(__file__).resolve().parents[1] / "configs"
 
@@ -27,11 +32,12 @@ def _load_config(name: str) -> Dict[str, Any]:
         return yaml.safe_load(handle) or {}
 
 
-DATASET_CFG = _load_config("dataset.yml")
-MODEL_CFG = _load_config("models.yml")
-EXPLAINER_CFG = _load_config("explainers.yml")
+DATASET_REGISTRY = DatasetRegistry()
+MODEL_REGISTRY = ModelRegistry()
+EXPLAINER_REGISTRY = ExplainerRegistry()
 METRIC_CFG = _load_config("metrics.yml")
 EXPERIMENT_CFG = _load_config("experiments.yml")
+VALIDATION_CFG = _load_config("validation.yml")
 
 
 def _import_object(module_name: str, attr: str) -> Any:
@@ -42,8 +48,13 @@ def _import_object(module_name: str, attr: str) -> Any:
     return obj
 
 
-def instantiate_dataset(name: str) -> TabularDataset:
-    spec = DATASET_CFG[name]
+def instantiate_dataset(name: str, *, data_type: Optional[str] = None) -> TabularDataset:
+    spec = DATASET_REGISTRY.get(name)
+    dataset_type = spec.get("type")
+    if data_type and dataset_type != data_type:
+        raise ValueError(
+            f"Dataset '{name}' has type '{dataset_type}' which does not match requested '{data_type}'."
+        )
     adapter_spec = spec.get("adapter")
     if adapter_spec:
         adapter_cls = _import_object(adapter_spec["module"], adapter_spec["class"])
@@ -53,8 +64,13 @@ def instantiate_dataset(name: str) -> TabularDataset:
     return adapter.load()
 
 
-def instantiate_model(name: str) -> SklearnModel:
-    spec = MODEL_CFG[name]
+def instantiate_model(name: str, *, data_type: Optional[str] = None) -> SklearnModel:
+    spec = MODEL_REGISTRY.get(name)
+    supported_types = spec.get("supported_data_types", ["tabular"])
+    if data_type and data_type not in supported_types:
+        raise ValueError(
+            f"Model '{name}' does not support data type '{data_type}'. Supported types: {supported_types}."
+        )
     model_cls = _import_object(spec["module"], spec["class"])
     params = spec.get("params", {}) or {}
     requires_scaler = spec.get("fit", {}).get("requires_scaler", False)
@@ -77,9 +93,15 @@ def instantiate_explainer(
     model: Any,
     dataset: TabularDataset,
     *,
+    data_type: Optional[str] = None,
     logging_cfg: Optional[Dict[str, Any]] = None,
 ):
-    spec = EXPLAINER_CFG[name]
+    spec = EXPLAINER_REGISTRY.get(name)
+    supported_types = spec.get("supported_data_types", ["tabular"])
+    if data_type and data_type not in supported_types:
+        raise ValueError(
+            f"Explainer '{name}' does not support data type '{data_type}'. Supported types: {supported_types}."
+        )
     config = {"type": spec["type"]}
     params = copy.deepcopy(spec.get("params", {}) or {})
     config.update(params)

@@ -4,11 +4,14 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Any, Dict, Optional, Sequence, Tuple
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Sequence, Tuple, cast
 
 import numpy as np
 
 from src.datasets.tabular import TabularDataset
+
+if TYPE_CHECKING:  # pragma: no cover - imported for type checking only
+    import pandas as pd
 
 try:  # pragma: no cover - optional dependency
     import pandas as pd
@@ -39,7 +42,11 @@ class LoaderDatasetAdapter(DatasetAdapter):
         if not loader_spec:
             raise ValueError(f"Dataset '{self.name}' is missing a loader specification")
         loader = _import_object(loader_spec["module"], loader_spec["factory"])
-        loader_params = dict(self.spec.get("params", {}) or {})
+        loader_params = dict(
+            self.spec.get("loader_params")
+            or self.spec.get("params")
+            or {}
+        )
 
         obj = loader(**loader_params)
         if isinstance(obj, TabularDataset):
@@ -50,7 +57,12 @@ class LoaderDatasetAdapter(DatasetAdapter):
         feature_names = _maybe_get(obj, "feature_names")
         frame = _maybe_get(obj, "frame")
 
-        if frame is not None and _HAS_PANDAS and isinstance(frame, pd.DataFrame):
+        if (
+            frame is not None
+            and _HAS_PANDAS
+            and pd is not None
+            and isinstance(frame, pd.DataFrame)
+        ):
             data, target, feature_names = _extract_frame_components(
                 frame,
                 target,
@@ -61,7 +73,7 @@ class LoaderDatasetAdapter(DatasetAdapter):
         elif frame is not None:
             data = frame
 
-        split_cfg = loader_params.get("split", self.spec.get("split", {})) or {}
+        split_cfg = loader_params.get("split") or self.spec.get("split") or {}
         test_size = float(split_cfg.get("test_size", 0.25))
         random_state = split_cfg.get("random_state", 42)
         stratify = None
@@ -110,12 +122,17 @@ def _train_test_split(
 ) -> Tuple[np.ndarray, np.ndarray, Optional[np.ndarray], Optional[np.ndarray]]:
     from sklearn.model_selection import train_test_split
 
-    return train_test_split(
-        np.asarray(X),
-        None if y is None else np.asarray(y),
-        test_size=test_size,
-        random_state=random_state,
-        stratify=stratify,
+    return cast(
+        Tuple[np.ndarray, np.ndarray, Optional[np.ndarray], Optional[np.ndarray]],
+        tuple(
+            train_test_split(
+                np.asarray(X),
+                None if y is None else np.asarray(y),
+                test_size=test_size,
+                random_state=random_state,
+                stratify=stratify,
+            )
+        ),
     )
 
 
@@ -142,7 +159,7 @@ def _maybe_get(obj: Any, attr: str) -> Any:
 
 
 def _extract_frame_components(
-    frame: "pd.DataFrame",
+    frame,
     target,
     feature_names,
     *,
@@ -170,7 +187,7 @@ def _extract_frame_components(
 def _ensure_numeric_features(
     data: Any, feature_names: Optional[Sequence[str]]
 ) -> Tuple[np.ndarray, Optional[Sequence[str]]]:
-    if _HAS_PANDAS and isinstance(data, pd.DataFrame):
+    if _HAS_PANDAS and pd is not None and isinstance(data, pd.DataFrame):
         encoded = _encode_categorical_dataframe(data)
         if feature_names is None or len(encoded.columns) != len(feature_names):
             feature_names = list(encoded.columns)
@@ -180,11 +197,16 @@ def _ensure_numeric_features(
     if array.ndim == 1:
         array = array.reshape(-1, 1)
     if array.dtype.kind in {"O", "U", "S"}:
-        if not _HAS_PANDAS:
+        if not _HAS_PANDAS or pd is None:
             raise TypeError(
                 "Feature matrix contains non-numeric values but pandas is unavailable"
             )
-        columns = feature_names or [f"feature_{i}" for i in range(array.shape[1])]
+        assert pd is not None
+        columns: List[str]
+        if feature_names is None:
+            columns = [f"feature_{i}" for i in range(array.shape[1])]
+        else:
+            columns = list(feature_names)
         encoded = _encode_categorical_dataframe(pd.DataFrame(array, columns=columns))
         feature_names = list(encoded.columns)
         return encoded.to_numpy(dtype=float, copy=True), feature_names
@@ -193,8 +215,9 @@ def _ensure_numeric_features(
 
 
 def _encode_categorical_dataframe(df):
-    if not _HAS_PANDAS:
+    if not _HAS_PANDAS or pd is None:
         raise RuntimeError("pandas is required to encode categorical features")
+    assert pd is not None
     categorical_cols = df.select_dtypes(include=["object", "category"]).columns
     if not categorical_cols.empty:
         df = pd.get_dummies(df, columns=list(categorical_cols), dummy_na=False)

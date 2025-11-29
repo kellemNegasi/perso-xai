@@ -1,0 +1,11 @@
+tabular:
+  class_imbalance_ratio: 0.2
+  min_dataset_size: 100
+  min_test_size: 10
+  max_missing_ratio: 0.3
+  feature_correlation_threshold: 0.95
+  min_features: 2
+  max_features: 2000
+  outlier_threshold: 3.0
+  max_outlier_ratio: 0.1
+  max_skewness: 3.0

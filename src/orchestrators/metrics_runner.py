@@ -11,8 +11,14 @@ from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 
 import numpy as np
 
+from src.validators import TabularDataValidator
+
 from .utils import (
+    DATASET_REGISTRY,
+    EXPLAINER_REGISTRY,
     EXPERIMENT_CFG,
+    MODEL_REGISTRY,
+    VALIDATION_CFG,
     instantiate_dataset,
     instantiate_explainer,
     instantiate_metric,
@@ -21,8 +27,10 @@ from .utils import (
     metric_capabilities,
     to_serializable,
 )
+from .validation import validate_artifact_compatibility
 
 LOGGER = logging.getLogger(__name__)
+TABULAR_VALIDATOR = TabularDataValidator(VALIDATION_CFG.get("tabular", {}))
 
 
 def run_experiment(
@@ -53,8 +61,11 @@ def run_experiment(
     logging_cfg = exp_cfg.get("logging", {}) or {}
     log_progress = bool(logging_cfg.get("progress"))
 
-    dataset_name = exp_cfg["dataset"]
-    configured_models = exp_cfg.get("models")
+    dataset_name = _resolve_artifact_key(exp_cfg.get("dataset"), "dataset")
+    configured_models = _resolve_artifact_list(exp_cfg.get("models"), "model")
+    model_entry = _resolve_artifact_key(
+        exp_cfg.get("model"), "model", required=False
+    )
     if model_override is not None:
         model_name = model_override
     elif configured_models:
@@ -63,13 +74,35 @@ def run_experiment(
                 "Experiment defines multiple models; provide model_override or use run_experiments."
             )
         model_name = configured_models[0]
+    elif model_entry:
+        model_name = model_entry
     else:
-        model_name = exp_cfg["model"]
-    explainer_names = exp_cfg.get("explainers") or [exp_cfg["explainer"]]
+        raise ValueError(f"Experiment '{experiment_name}' is missing a model reference.")
+    explainer_configs = exp_cfg.get("explainers")
+    if not explainer_configs and exp_cfg.get("explainer"):
+        explainer_configs = [exp_cfg["explainer"]]
+    explainer_names = _resolve_artifact_list(explainer_configs, "explainer")
     metric_names = exp_cfg.get("metrics", [])
 
-    dataset = instantiate_dataset(dataset_name)
-    model = instantiate_model(model_name)
+    dataset_spec = DATASET_REGISTRY.get(dataset_name)
+    model_spec = MODEL_REGISTRY.get(model_name)
+    explainer_specs = [(name, EXPLAINER_REGISTRY.get(name)) for name in explainer_names]
+    dataset_type = validate_artifact_compatibility(
+        dataset=(dataset_name, dataset_spec),
+        models=[(model_name, model_spec)],
+        explainers=explainer_specs,
+        scope=f"experiment '{experiment_name}'",
+    )
+
+    dataset = instantiate_dataset(dataset_name, data_type=dataset_type)
+    _run_dataset_validation(
+        dataset_name=dataset_name,
+        dataset_type=dataset_type,
+        dataset_spec=dataset_spec,
+        dataset=dataset,
+        experiment_name=experiment_name,
+    )
+    model = instantiate_model(model_name, data_type=dataset_type)
     model.fit(dataset.X_train, dataset.y_train)
 
     X_eval = dataset.X_test
@@ -92,7 +125,7 @@ def run_experiment(
         if log_progress:
             LOGGER.info("Running %s explainer", expl_name)
         explainer = instantiate_explainer(
-            expl_name, model, dataset, logging_cfg=logging_cfg
+            expl_name, model, dataset, data_type=dataset_type, logging_cfg=logging_cfg
         )
         expl_results = explainer.explain_dataset(X_eval, y_eval)
 
@@ -219,9 +252,15 @@ def run_experiments(
 
     for name in experiment_names:
         exp_cfg = EXPERIMENT_CFG[name]
-        model_list = list(exp_cfg.get("models") or [])
+        model_list = _resolve_artifact_list(exp_cfg.get("models"), "model")
         if not model_list:
-            model_list = [exp_cfg["model"]]
+            fallback = _resolve_artifact_key(
+                exp_cfg.get("model"), "model", required=False
+            )
+            if fallback:
+                model_list = [fallback]
+        if not model_list:
+            raise ValueError(f"Experiment '{name}' does not define any models.")
 
         for model_name in model_list:
             file_path = None
@@ -236,6 +275,70 @@ def run_experiments(
             )
             results.append(experiment_result)
     return results
+
+
+def _resolve_artifact_key(
+    entry: Any,
+    kind: str,
+    *,
+    required: bool = True,
+) -> Optional[str]:
+    if entry is None:
+        if required:
+            raise ValueError(f"Experiment is missing a '{kind}' reference.")
+        return None
+    if isinstance(entry, str):
+        return entry
+    if isinstance(entry, dict):
+        key = entry.get("key") or entry.get("name")
+        if key:
+            return str(key)
+    if required:
+        raise ValueError(
+            f"Experiment {kind} entries must be strings or mappings with a 'key'. Got: {entry!r}"
+        )
+    return None
+
+
+def _resolve_artifact_list(entries: Optional[Iterable[Any]], kind: str) -> List[str]:
+    if not entries:
+        return []
+    names: List[str] = []
+    for entry in entries:
+        key = _resolve_artifact_key(entry, kind)
+        if key:
+            names.append(key)
+    return names
+
+
+def _run_dataset_validation(
+    *,
+    dataset_name: str,
+    dataset_type: str,
+    dataset_spec: Dict[str, Any],
+    dataset,
+    experiment_name: str,
+):
+    if dataset_type != "tabular":
+        return
+    validation_cfg = (dataset_spec.get("validation") or {}).get("overrides") or {}
+    result = TABULAR_VALIDATOR.validate(
+        dataset=dataset,
+        dataset_name=dataset_name,
+        overrides=validation_cfg,
+    )
+    for warning in result.warnings:
+        LOGGER.warning(
+            "Dataset validation warning for %s (%s): %s",
+            dataset_name,
+            experiment_name,
+            warning,
+        )
+    if not result.is_valid:
+        details = "; ".join(result.errors)
+        raise ValueError(
+            f"Experiment '{experiment_name}' failed dataset validation for '{dataset_name}': {details}"
+        )
 
 
 def _coerce_metric_dict(values: Optional[Dict[str, Any]]) -> Dict[str, float]:

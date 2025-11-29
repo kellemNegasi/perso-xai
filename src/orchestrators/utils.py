@@ -11,13 +11,12 @@ from typing import Any, Dict, Optional
 
 import numpy as np
 import yaml
-from sklearn.pipeline import Pipeline
-from sklearn.preprocessing import StandardScaler
 
 from src.datasets import TabularDataset
 from src.datasets.adapters import LoaderDatasetAdapter
 from src.explainers import make_explainer
 from src.models import SklearnModel
+from src.models.builder import build_estimator_from_spec
 from src.orchestrators.registry import (
     DatasetRegistry,
     ExplainerRegistry,
@@ -64,27 +63,19 @@ def instantiate_dataset(name: str, *, data_type: Optional[str] = None) -> Tabula
     return adapter.load()
 
 
-def instantiate_model(name: str, *, data_type: Optional[str] = None) -> SklearnModel:
+def instantiate_model(
+    name: str,
+    *,
+    data_type: Optional[str] = None,
+    params_override: Optional[Dict[str, Any]] = None,
+) -> SklearnModel:
     spec = MODEL_REGISTRY.get(name)
     supported_types = spec.get("supported_data_types", ["tabular"])
     if data_type and data_type not in supported_types:
         raise ValueError(
             f"Model '{name}' does not support data type '{data_type}'. Supported types: {supported_types}."
         )
-    model_cls = _import_object(spec["module"], spec["class"])
-    params = spec.get("params", {}) or {}
-    requires_scaler = spec.get("fit", {}).get("requires_scaler", False)
-
-    if requires_scaler:
-        estimator = Pipeline(
-            [
-                ("scaler", StandardScaler()),
-                ("estimator", model_cls(**params)),
-            ]
-        )
-    else:
-        estimator = model_cls(**params)
-
+    estimator = build_estimator_from_spec(spec, params_override=params_override)
     return SklearnModel(name=name, estimator=estimator)
 
 

@@ -57,6 +57,33 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Print a compact JSON summary of experiment descriptors to stdout.",
     )
+    parser.add_argument(
+        "--tune-models",
+        action="store_true",
+        help="Run hyperparameter tuning for every dataset/model pair before training.",
+    )
+    parser.add_argument(
+        "--use-tuned-params",
+        action="store_true",
+        help="Reuse tuned hyperparameters from saved artifacts (if present).",
+    )
+    parser.add_argument(
+        "--reuse-trained-models",
+        action="store_true",
+        help="Load persisted trained models when available and save new ones after training.",
+    )
+    parser.add_argument(
+        "--tuning-output-dir",
+        type=Path,
+        default=None,
+        help="Directory for hyperparameter tuning artifacts (defaults to saved_models/tuning_results).",
+    )
+    parser.add_argument(
+        "--model-store-dir",
+        type=Path,
+        default=None,
+        help="Directory for serialized trained models (defaults to saved_models).",
+    )
     return parser
 
 
@@ -84,6 +111,11 @@ def _run_with_model_override(
     model_name: str,
     max_instances: int | None,
     output_dir: Path | None,
+    tune_models: bool,
+    use_tuned_params: bool,
+    reuse_trained_models: bool,
+    tuning_output_dir: Path | None,
+    model_store_dir: Path | None,
 ) -> List[dict]:
     results: List[dict] = []
     for name in experiments:
@@ -97,6 +129,11 @@ def _run_with_model_override(
                 max_instances=max_instances,
                 output_path=file_path,
                 model_override=model_name,
+                tune_models=tune_models,
+                use_tuned_params=use_tuned_params,
+                reuse_trained_models=reuse_trained_models,
+                tuning_output_dir=tuning_output_dir,
+                model_store_dir=model_store_dir,
             )
         )
     return results
@@ -129,6 +166,15 @@ def main(argv: Sequence[str] | None = None) -> int:
     cli_args = list(argv) if argv is not None else sys.argv[1:]
     logger.debug("CLI arguments: %s", cli_args)
     output_dir = _ensure_output_dir(args.output_dir)
+    logger.info(
+        "Requested experiments=%s max_instances=%s model_override=%s tune=%s use_tuned=%s reuse_models=%s",
+        args.experiments,
+        args.max_instances,
+        args.model,
+        args.tune_models,
+        args.use_tuned_params,
+        args.reuse_trained_models,
+    )
 
     if args.model:
         results = _run_with_model_override(
@@ -136,12 +182,22 @@ def main(argv: Sequence[str] | None = None) -> int:
             model_name=args.model,
             max_instances=args.max_instances,
             output_dir=output_dir,
+            tune_models=args.tune_models,
+            use_tuned_params=args.use_tuned_params,
+            reuse_trained_models=args.reuse_trained_models,
+            tuning_output_dir=args.tuning_output_dir,
+            model_store_dir=args.model_store_dir,
         )
     else:
         results = run_experiments(
             args.experiments,
             max_instances=args.max_instances,
             output_dir=output_dir,
+            tune_models=args.tune_models,
+            use_tuned_params=args.use_tuned_params,
+            reuse_trained_models=args.reuse_trained_models,
+            tuning_output_dir=args.tuning_output_dir,
+            model_store_dir=args.model_store_dir,
         )
 
     logger.info(

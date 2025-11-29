@@ -93,3 +93,17 @@ counts, class-imbalance tolerances, correlation/outlier/skewness limits, etc.). 
 `TabularDataValidator` merges these thresholds with any per-dataset overrides from `dataset.yml`
 before experiments run. Validation errors halt the experiment early; warnings are logged so
 future explainers/metrics can reuse the same guardrails by data type.
+
+## Hyperparameter tuning (`hyperparameters.yml`)
+
+The benchmarking-ready tuner expects a dedicated config describing:
+
+- `settings`: global knobs (CV folds, scoring metric, parallelism, optimization method).
+- `grids`: parameter grids per model key. Only models that exist in both repos (e.g.,
+  `random_forest`, `gradient_boosting`, `mlp_classifier`) currently include grids; you can add
+  more entries later using the same shape.
+
+When `run_experiment(..., tune_models=True)` is invoked (via the CLI flags or programmatically),
+the orchestrator loads these grids, runs scikit-learn's `GridSearchCV`, persists the best params
+under `saved_models/tuning_results/<dataset>/<model>.json`, and reuses them when
+`use_tuned_params=True`.

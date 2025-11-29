@@ -12,6 +12,8 @@ from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 import numpy as np
 
 from src.validators import TabularDataValidator
+from src.utils.hyperparameter_tuning import HyperparameterTuner
+from src.utils.model_persistence import ModelPersistence
 
 from .utils import (
     DATASET_REGISTRY,
@@ -39,6 +41,11 @@ def run_experiment(
     max_instances: Optional[int] = None,
     output_path: Optional[str | Path] = None,
     model_override: Optional[str] = None,
+    tune_models: bool = False,
+    use_tuned_params: bool = False,
+    reuse_trained_models: bool = False,
+    tuning_output_dir: Optional[str | Path] = None,
+    model_store_dir: Optional[str | Path] = None,
 ) -> Dict[str, Any]:
     """
     Execute a configured experiment (dataset/model/explainers/metrics).
@@ -51,12 +58,23 @@ def run_experiment(
         Optional cap on the number of evaluation instances.
     output_path : str | Path | None, optional
         If provided, the serialized results are written to this path.
+    tune_models : bool, optional
+        Run hyperparameter tuning before fitting any missing models.
+    use_tuned_params : bool, optional
+        Reuse previously tuned parameters (if available) during instantiation.
+    reuse_trained_models : bool, optional
+        Load/supply persisted models stored under ``saved_models``.
+    tuning_output_dir : str | Path | None, optional
+        Custom directory for hyperparameter tuning artifacts.
+    model_store_dir : str | Path | None, optional
+        Directory for persisted trained models.
 
     Returns
     -------
     Dict[str, Any]
         Nested experiment result ready for JSON serialization.
     """
+    LOGGER.info("=== Running experiment '%s' ===", experiment_name)
     exp_cfg = EXPERIMENT_CFG[experiment_name]
     logging_cfg = exp_cfg.get("logging", {}) or {}
     log_progress = bool(logging_cfg.get("progress"))
@@ -94,6 +112,7 @@ def run_experiment(
         scope=f"experiment '{experiment_name}'",
     )
 
+    LOGGER.info("Loading dataset '%s' (type=%s)", dataset_name, dataset_type)
     dataset = instantiate_dataset(dataset_name, data_type=dataset_type)
     _run_dataset_validation(
         dataset_name=dataset_name,
@@ -102,8 +121,42 @@ def run_experiment(
         dataset=dataset,
         experiment_name=experiment_name,
     )
-    model = instantiate_model(model_name, data_type=dataset_type)
-    model.fit(dataset.X_train, dataset.y_train)
+    LOGGER.info("Instantiating model '%s'", model_name)
+    tuner: Optional[HyperparameterTuner] = None
+    if tune_models or use_tuned_params:
+        tuner = HyperparameterTuner(
+            output_dir=tuning_output_dir,
+            model_registry=MODEL_REGISTRY,
+        )
+    persistence: Optional[ModelPersistence] = None
+    if reuse_trained_models:
+        persistence = ModelPersistence(base_dir=model_store_dir or Path("saved_models"))
+
+    model = None
+    if persistence:
+        cached_model = persistence.load(dataset_name, model_name)
+        if cached_model is not None:
+            model = cached_model
+
+    if model is None:
+        params_override: Optional[Dict[str, Any]] = None
+        if tuner:
+            if tune_models:
+                params_override = tuner.ensure_best_parameters(
+                    dataset_name=dataset_name,
+                    model_name=model_name,
+                    X=dataset.X_train,
+                    y=dataset.y_train,
+                )
+            elif use_tuned_params:
+                params_override = tuner.load_best_parameters(dataset_name, model_name)
+        model = instantiate_model(
+            model_name, data_type=dataset_type, params_override=params_override
+        )
+        LOGGER.info("Training model '%s' on dataset '%s'", model_name, dataset_name)
+        model.fit(dataset.X_train, dataset.y_train)
+        if persistence:
+            persistence.save(dataset_name, model_name, model)
 
     X_eval = dataset.X_test
     y_eval = dataset.y_test
@@ -122,8 +175,7 @@ def run_experiment(
     # Compute the explanations and batch-level metrics first.
     explainer_outputs: Dict[str, Dict[str, Any]] = {}
     for expl_name in explainer_names:
-        if log_progress:
-            LOGGER.info("Running %s explainer", expl_name)
+        LOGGER.info("Generating explanations with '%s'", expl_name)
         explainer = instantiate_explainer(
             expl_name, model, dataset, data_type=dataset_type, logging_cfg=logging_cfg
         )
@@ -175,7 +227,7 @@ def run_experiment(
                 if not caps["per_instance"]:
                     continue
                 key = (metric_name, expl_name)
-                if log_progress and key not in announced_metrics:
+                if key not in announced_metrics:
                     LOGGER.info(
                         "Running %s metric (per-instance) for %s",
                         metric_name,
@@ -220,7 +272,14 @@ def run_experiment(
     if output_path is not None:
         path = Path(output_path)
         path.write_text(json.dumps(to_serializable(result), indent=2), encoding="utf-8")
+        LOGGER.info("Wrote experiment result to %s", path)
 
+    LOGGER.info(
+        "Completed experiment '%s' (%d instances, %d explainers)",
+        experiment_name,
+        len(instances),
+        len(explainer_names),
+    )
     return result
 
 
@@ -229,6 +288,11 @@ def run_experiments(
     *,
     max_instances: Optional[int] = None,
     output_dir: Optional[str | Path] = None,
+    tune_models: bool = False,
+    use_tuned_params: bool = False,
+    reuse_trained_models: bool = False,
+    tuning_output_dir: Optional[str | Path] = None,
+    model_store_dir: Optional[str | Path] = None,
 ) -> List[Dict[str, Any]]:
     """
     Run multiple experiments sequentially.
@@ -241,6 +305,16 @@ def run_experiments(
         Optional evaluation cap shared across experiments.
     output_dir : str | Path | None, optional
         If provided, each experiment result is written to ``output_dir/<name>.json``.
+    tune_models : bool, optional
+        Whether to run hyperparameter tuning for every dataset/model pair.
+    use_tuned_params : bool, optional
+        Reuse persisted tuned hyperparameters (if available).
+    reuse_trained_models : bool, optional
+        Load/save trained estimators for reuse across experiments.
+    tuning_output_dir : str | Path | None, optional
+        Directory where tuning artifacts will be persisted.
+    model_store_dir : str | Path | None, optional
+        Directory for serialized model checkpoints.
 
     Returns
     -------
@@ -272,6 +346,11 @@ def run_experiments(
                 max_instances=max_instances,
                 output_path=file_path,
                 model_override=model_name,
+                tune_models=tune_models,
+                use_tuned_params=use_tuned_params,
+                reuse_trained_models=reuse_trained_models,
+                tuning_output_dir=tuning_output_dir,
+                model_store_dir=model_store_dir,
             )
             results.append(experiment_result)
     return results
@@ -326,6 +405,12 @@ def _run_dataset_validation(
         dataset=dataset,
         dataset_name=dataset_name,
         overrides=validation_cfg,
+    )
+    LOGGER.info(
+        "Validation summary for %s: %s warnings, %s errors",
+        dataset_name,
+        len(result.warnings),
+        len(result.errors),
     )
     for warning in result.warnings:
         LOGGER.warning(

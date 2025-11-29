@@ -23,6 +23,20 @@ ArrayLike = Union[np.ndarray, "pd.Series", "pd.DataFrame", List[float], Tuple[fl
 InstanceLike = Union[np.ndarray, "pd.Series", List[float], Tuple[float, ...]]  # noqa: F821
 
 
+def _safe_scalar(value: Any) -> Any:
+    """Convert numpy scalars/arrays to Python scalars where possible."""
+    if value is None:
+        return None
+    if np.isscalar(value):
+        return value.item() if isinstance(value, np.generic) else value
+    arr = np.asarray(value)
+    if arr.ndim == 0:
+        return arr.item()
+    if arr.size == 1:
+        return arr.reshape(-1)[0].item()
+    return arr.tolist()
+
+
 class BaseExplainer(ABC):
     """
     Base class for all local (per-instance) explanation methods on tabular data.
@@ -67,6 +81,13 @@ class BaseExplainer(ABC):
 
         # Seed (if provided) for any stochastic explainers
         self.random_state: Optional[int] = self._expl_cfg.get("random_state")
+        self._sampling_info: Dict[str, Any] = {
+            "strategy": self._expl_cfg.get("sampling_strategy", "sequential"),
+            "max_instances": self._expl_cfg.get("max_instances")
+            or self._expl_cfg.get("max_test_samples"),
+            "original_size": None,
+            "selected_size": None,
+        }
 
     # -----------------------------
     # Public API (high-level)
@@ -131,6 +152,7 @@ class BaseExplainer(ABC):
             )
 
         explanations = self.explain_batch(X_np)
+        explanations = self._augment_metadata(explanations, y_np)
 
         total_time = time.time() - start_all
         self.generation_time = total_time
@@ -170,6 +192,7 @@ class BaseExplainer(ABC):
             "config": self.config,
             "supported_data_types": getattr(self, "supported_data_types", []),
             "supported_model_types": getattr(self, "supported_model_types", []),
+            "sampling": self._sampling_info,
         }
 
     def empty_result(self, reason: str = "Not compatible or failed.") -> Dict[str, Any]:
@@ -201,6 +224,8 @@ class BaseExplainer(ABC):
             # backward-compat with older config name
             max_n = self._expl_cfg.get("max_test_samples")
 
+        original_len = len(X)
+
         if max_n is not None and len(X) > int(max_n):
             self.logger.info(
                 "Limiting dataset from %d to %d instances for explanation generation",
@@ -209,6 +234,12 @@ class BaseExplainer(ABC):
             X = X[: int(max_n)]
             if y is not None:
                 y = y[: int(max_n)]
+            self._sampling_info["selected_size"] = int(max_n)
+        else:
+            self._sampling_info["selected_size"] = original_len
+
+        self._sampling_info["max_instances"] = int(max_n) if max_n is not None else None
+        self._sampling_info["original_size"] = original_len
         return X, y
 
     def _coerce_X_y(
@@ -367,3 +398,23 @@ class BaseExplainer(ABC):
             return [f"feature_{i}" for i in range(instance_array.shape[0])]
         # 2D edge-case (shouldn't happen for a single instance)
         return [f"feature_{i}" for i in range(instance_array.shape[-1])]
+
+    def _augment_metadata(
+        self,
+        explanations: List[Dict[str, Any]],
+        y: Optional[np.ndarray],
+    ) -> List[Dict[str, Any]]:
+        """
+        Inject structured metadata (instance index, true label, sampling info) into
+        explanation dictionaries. Subclasses can rely on this being called by
+        explain_dataset regardless of how explain_batch is implemented.
+        """
+        sampling_meta = dict(self._sampling_info) if self._sampling_info else {}
+        for idx, record in enumerate(explanations):
+            metadata = record.setdefault("metadata", {})
+            metadata.setdefault("instance_index", idx)
+            if y is not None and idx < len(y):
+                metadata.setdefault("true_label", _safe_scalar(y[idx]))
+            if sampling_meta and "sampling" not in metadata:
+                metadata["sampling"] = sampling_meta
+        return explanations

@@ -1,4 +1,5 @@
 tabular:
+  min_classes: 2
   class_imbalance_ratio: 0.2
   min_dataset_size: 100
   min_test_size: 10

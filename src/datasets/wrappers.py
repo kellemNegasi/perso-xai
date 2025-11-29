@@ -24,7 +24,20 @@ def _normalize_text(value: Any) -> str:
 
 def _adult_income_transform(value: Any) -> int:
     text = _normalize_text(value)
-    return 1 if ">" in text else 0
+    # OpenML encodes the positive class with several variants such as ">50K"
+    # and "50000+". Be explicit about the accepted tokens instead of
+    # searching for ">" which fails for some datasets.
+    positive_tokens = {
+        "50000+",
+        ">50k",
+        "50k+",
+        ">50000",
+        "morethan50k",
+        "morethan50000",
+    }
+    if text in positive_tokens:
+        return 1
+    return 0
 
 
 def _bank_marketing_transform(value: Any) -> int:

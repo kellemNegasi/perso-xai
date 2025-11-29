@@ -23,6 +23,7 @@ class TabularDataValidator:
     """Validate TabularDataset instances using configurable thresholds."""
 
     DEFAULTS: Dict[str, float] = {
+        "min_classes": 2,
         "class_imbalance_ratio": 0.2,
         "min_dataset_size": 100,
         "min_test_size": 10,
@@ -57,6 +58,7 @@ class TabularDataValidator:
         y_test = self._safe_targets(dataset.y_test)
 
         self._check_dataset_size(X_train, X_test, thresholds, result)
+        self._check_class_cardinality(y_train, y_test, thresholds, result)
         self._check_class_balance(y_train, y_test, thresholds, result)
         self._check_feature_counts(X_train, thresholds, result)
         self._check_missing_values(X_train, X_test, thresholds, result)
@@ -129,6 +131,37 @@ class TabularDataValidator:
         if missing_classes:
             result.errors.append(
                 f"Test split missing classes present in training data: {sorted(missing_classes)}."
+            )
+
+    def _check_class_cardinality(
+        self,
+        y_train: Optional[np.ndarray],
+        y_test: Optional[np.ndarray],
+        thresholds: Dict[str, float],
+        result: ValidationResult,
+    ):
+        min_classes = int(thresholds.get("min_classes", 0))
+        if min_classes <= 0 or y_train is None:
+            return
+
+        train_unique = np.unique(y_train)
+        n_train_classes = len(train_unique)
+        result.details["train_unique_classes"] = n_train_classes
+        if y_test is not None:
+            n_test_classes = len(np.unique(y_test))
+            result.details["test_unique_classes"] = n_test_classes
+        else:
+            n_test_classes = 0
+
+        if n_train_classes < min_classes:
+            result.errors.append(
+                f"Training labels contain only {n_train_classes} class(es); "
+                f"need at least {min_classes}."
+            )
+        if y_test is not None and n_test_classes < min_classes:
+            result.errors.append(
+                f"Test labels contain only {n_test_classes} class(es); "
+                f"need at least {min_classes}."
             )
 
     def _check_feature_counts(

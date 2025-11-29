@@ -45,7 +45,7 @@ class CausalSHAPExplainer(BaseExplainer):
         causal_graph = self._infer_causal_structure(X_train, feature_names)
         attributions, info = self._causal_shap(inst_vec, X_train, causal_graph, feature_names)
 
-        prediction, t_pred = self._timeit(self._predict, inst2d)
+        prediction, t_pred = self._timeit(self._predict_numeric, inst2d)
         prediction_proba = self._predict_proba(inst2d)
 
         pred_arr = np.asarray(prediction).ravel()
@@ -82,7 +82,7 @@ class CausalSHAPExplainer(BaseExplainer):
             return []
 
         batch_start = time.time()
-        preds = np.asarray(self._predict(X_np))
+        preds = np.asarray(self._predict_numeric(X_np))
         proba = self._predict_proba(X_np)
 
         results: List[Dict[str, Any]] = []
@@ -159,8 +159,8 @@ class CausalSHAPExplainer(BaseExplainer):
         feature_names: List[str],
     ) -> Tuple[np.ndarray, Dict[str, Any]]:
         baseline = np.mean(X_train, axis=0)
-        base_pred = float(np.asarray(self._predict(instance.reshape(1, -1))).ravel()[0])
-        baseline_pred = float(np.asarray(self._predict(baseline.reshape(1, -1))).ravel()[0])
+        base_pred = float(np.asarray(self._predict_numeric(instance.reshape(1, -1))).ravel()[0])
+        baseline_pred = float(np.asarray(self._predict_numeric(baseline.reshape(1, -1))).ravel()[0])
 
         n_features = len(instance)
         coalition_samples = int(self._expl_cfg.get("causal_shap_coalitions", 50))
@@ -175,11 +175,15 @@ class CausalSHAPExplainer(BaseExplainer):
                 coalition = self._sample_coalition(idx, n_features, parent_indices)
                 inst_without = baseline.copy()
                 inst_without[coalition] = instance[coalition]
-                pred_without = float(np.asarray(self._predict(inst_without.reshape(1, -1))).ravel()[0])
+                pred_without = float(
+                    np.asarray(self._predict_numeric(inst_without.reshape(1, -1))).ravel()[0]
+                )
 
                 inst_with = inst_without.copy()
                 inst_with[idx] = instance[idx]
-                pred_with = float(np.asarray(self._predict(inst_with.reshape(1, -1))).ravel()[0])
+                pred_with = float(
+                    np.asarray(self._predict_numeric(inst_with.reshape(1, -1))).ravel()[0]
+                )
 
                 marginal_effects.append(pred_with - pred_without)
 

@@ -67,20 +67,21 @@ class SHAPExplainer(BaseExplainer):
 
         inst2d = self._to_numpy_2d(instance)
         pred, t_pred = self._timeit(self._predict, inst2d)
+        pred_numeric = np.asarray(self._predict_numeric(inst2d))
         proba = self._predict_proba(inst2d)
 
         # Compute SHAP values
         if self._is_tree:
             shap_vals_raw, t_shap = self._timeit(self._explainer.shap_values, inst2d, silent=True)
-            shap_vals = self._select_shap_values(shap_vals_raw, pred)
+            shap_vals = self._select_shap_values(shap_vals_raw, pred_numeric)
             expected = self._explainer.expected_value
-            exp_val = self._select_expected_value(expected, pred)
+            exp_val = self._select_expected_value(expected, pred_numeric)
         else:
             # KernelExplainer expects small batches; just one instance
             shap_vals_raw, t_shap = self._timeit(self._explainer.shap_values, inst2d,silent=True)
-            shap_vals = self._select_shap_values(shap_vals_raw, pred)
+            shap_vals = self._select_shap_values(shap_vals_raw, pred_numeric)
             expected = self._explainer.expected_value
-            exp_val = self._select_expected_value(expected, pred)
+            exp_val = self._select_expected_value(expected, pred_numeric)
 
         # Standardize output
         feature_names = self._infer_feature_names(inst2d[0])
@@ -111,9 +112,10 @@ class SHAPExplainer(BaseExplainer):
 
         batch_start = time.time()
         preds = np.asarray(self._predict(X_np))
+        preds_numeric = np.asarray(self._predict_numeric(X_np))
         proba = self._predict_proba(X_np)
         shap_vals_raw = self._explainer.shap_values(X_np, silent=True)
-        shap_vals = self._select_shap_values(shap_vals_raw, preds)
+        shap_vals = self._select_shap_values(shap_vals_raw, preds_numeric)
         expected = self._explainer.expected_value
 
         results: List[Dict[str, Any]] = []
@@ -123,7 +125,7 @@ class SHAPExplainer(BaseExplainer):
             proba_val = None
             if proba is not None:
                 proba_val = proba[idx] if proba.ndim > 1 else proba
-            exp_val = self._select_expected_value(expected, np.asarray(preds[idx : idx + 1]))
+            exp_val = self._select_expected_value(expected, np.asarray(preds_numeric[idx : idx + 1]))
             attr_row = shap_vals[idx] if shap_vals.ndim > 1 else shap_vals
             results.append(
                 self._standardize_explanation_output(
@@ -160,7 +162,7 @@ class SHAPExplainer(BaseExplainer):
         """Prediction function for KernelSHAP (classification-friendly)."""
         if hasattr(self.model, "predict_proba"):
             return lambda x: self.model.predict_proba(x)  # returns (n, C)
-        return lambda x: self.model.predict(x)  # shape (n,) or (n, 1)
+        return lambda x: self.model.predict_numeric(x)  # shape (n,) or (n, 1)
 
     def _select_shap_values(self, shap_values_raw, prediction: np.ndarray) -> np.ndarray:
         """
@@ -224,13 +226,13 @@ class SHAPExplainer(BaseExplainer):
             else:
                 bg_mean = np.zeros_like(inst)
 
-        base_pred = float(np.asarray(self._predict(inst)).ravel()[0])
+        base_pred = float(np.asarray(self._predict_numeric(inst)).ravel()[0])
         importances = np.zeros_like(inst, dtype=float)
 
         for j in range(len(inst)):
             perturbed = inst.copy()
             perturbed[j] = bg_mean[j]
-            new_pred = float(np.asarray(self._predict(perturbed)).ravel()[0])
+            new_pred = float(np.asarray(self._predict_numeric(perturbed)).ravel()[0])
             importances[j] = abs(base_pred - new_pred)
 
         feature_names = self._infer_feature_names(inst)

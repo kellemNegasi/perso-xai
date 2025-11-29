@@ -50,13 +50,13 @@ class LIMEExplainer(BaseExplainer):
         (attributions, info), t_lime = self._timeit(
             self._generate_local_explanation, inst_vec
         )
-        prediction, t_pred = self._timeit(self._predict, inst2d)
+        prediction, t_pred = self._timeit(self._predict_numeric, inst2d)
         prediction_proba = self._predict_proba(inst2d)
 
         baseline_prediction = None
         if self._train_mean is not None:
-            baseline_prediction = self._as_float(
-                np.asarray(self._predict(self._train_mean.reshape(1, -1))).ravel()[0]
+            baseline_prediction = float(
+                np.asarray(self._predict_numeric(self._train_mean.reshape(1, -1))).ravel()[0]
             )
 
         metadata = {
@@ -68,7 +68,7 @@ class LIMEExplainer(BaseExplainer):
 
         pred_array = np.asarray(prediction)
         raw_pred = pred_array[0] if pred_array.ndim > 0 else pred_array
-        pred_value = self._as_float(raw_pred, default=raw_pred)
+        pred_value = float(raw_pred)
 
         proba_value = None
         if prediction_proba is not None:
@@ -93,12 +93,12 @@ class LIMEExplainer(BaseExplainer):
             return []
 
         batch_start = time.time()
-        preds = np.asarray(self._predict(X_np))
+        preds = np.asarray(self._predict_numeric(X_np))
         proba = self._predict_proba(X_np)
         baseline_prediction = None
         if self._train_mean is not None:
-            baseline_prediction = self._as_float(
-                np.asarray(self._predict(self._train_mean.reshape(1, -1))).ravel()[0]
+            baseline_prediction = float(
+                np.asarray(self._predict_numeric(self._train_mean.reshape(1, -1))).ravel()[0]
             )
         results: List[Dict[str, Any]] = []
         for idx, inst_vec in enumerate(X_np):
@@ -107,7 +107,7 @@ class LIMEExplainer(BaseExplainer):
 
             pred_row = np.asarray(preds[idx]).ravel()
             base_value = pred_row[0] if pred_row.size else pred_row
-            pred_value = self._as_float(base_value, default=base_value)
+            pred_value = float(base_value)
 
             proba_value = None
             if proba is not None:
@@ -135,14 +135,6 @@ class LIMEExplainer(BaseExplainer):
         for record in results:
             record["generation_time"] = avg_time
         return results
-
-    @staticmethod
-    def _as_float(value: Any, default: Any | None = None) -> Any:
-        """Attempt to cast ``value`` to float, otherwise return the provided default."""
-        try:
-            return float(value)
-        except (TypeError, ValueError):
-            return default
 
     # ------------------------------------------------------------------ #
     # Internal helpers
@@ -191,7 +183,7 @@ class LIMEExplainer(BaseExplainer):
         )
         perturbations = np.vstack([instance, perturbations])
 
-        preds = np.asarray(self._predict(perturbations))
+        preds = np.asarray(self._predict_numeric(perturbations))
         target = self._local_target_vector(perturbations, preds)
 
         distances = np.linalg.norm(perturbations - instance, axis=1)

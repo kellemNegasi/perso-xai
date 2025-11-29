@@ -66,7 +66,7 @@ class IntegratedGradientsExplainer(BaseExplainer):
         self._ensure_training_cache(inst_vec)
 
         (attributions, info), t_attr = self._timeit(self._integrated_gradients, inst_vec)
-        prediction, t_pred = self._timeit(self._predict, inst2d)
+        prediction, t_pred = self._timeit(self._predict_numeric, inst2d)
         prediction_proba = self._predict_proba(inst2d)
 
         metadata = {
@@ -101,7 +101,7 @@ class IntegratedGradientsExplainer(BaseExplainer):
             return []
 
         batch_start = time.time()
-        preds = np.asarray(self._predict(X_np))
+        preds = np.asarray(self._predict_numeric(X_np))
         proba = self._predict_proba(X_np)
 
         results: List[Dict[str, Any]] = []
@@ -217,5 +217,5 @@ class IntegratedGradientsExplainer(BaseExplainer):
                 return float(proba[1])
             return float(proba[0])
 
-        preds = np.asarray(self.model.predict(row)).ravel()
+        preds = np.asarray(self._predict_numeric(row)).ravel()
         return float(preds[0])

@@ -271,6 +271,24 @@ class BaseExplainer(ABC):
         preds = self.model.predict(X_np)
         return np.asarray(preds)
 
+    def _predict_numeric(self, X: ArrayLike) -> np.ndarray:
+        """Return numeric predictions, delegating to model.predict_numeric when available."""
+        X_np = self._to_numpy_2d(X)
+        predict_numeric = getattr(self.model, "predict_numeric", None)
+        if callable(predict_numeric):
+            preds = predict_numeric(X_np)
+        else:
+            preds = self.model.predict(X_np)
+        arr = np.asarray(preds)
+        if np.issubdtype(arr.dtype, np.number):
+            return arr.astype(float)
+        try:
+            return arr.astype(float)
+        except (TypeError, ValueError) as exc:
+            raise TypeError(
+                "Model predictions are not numeric; implement predict_numeric to continue"
+            ) from exc
+
     def _predict_proba(self, X: ArrayLike) -> Optional[np.ndarray]:
         """
         Optional probability prediction wrapper (classification).

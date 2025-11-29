@@ -80,6 +80,8 @@ openml_adult_suite:
     - random_forest
     - hist_gradient_boosting
     - svm_rbf
+  logging:
+      progress: true
   <<: *openml_benchmark_defaults
 
 openml_bank_suite:
@@ -88,6 +90,8 @@ openml_bank_suite:
     - random_forest
     - hist_gradient_boosting
     - svm_rbf
+  logging:
+      progress: true
   <<: *openml_benchmark_defaults
 
 openml_german_suite:
@@ -96,4 +100,6 @@ openml_german_suite:
     - random_forest
     - hist_gradient_boosting
     - svm_rbf
+  logging:
+      progress: true
   <<: *openml_benchmark_defaults

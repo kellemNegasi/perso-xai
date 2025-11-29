@@ -42,7 +42,7 @@ breast_cancer:
 
 #---- OpenML Datasets ----#
 openml_adult_income:
-  description: "Census-Income dataset from OpenML (data_id=4535)."
+  description: "Census-Income dataset from OpenML (data_id=4535) ~ 48842K."
   adapter:
     module: src.datasets.adapters
     class: LoaderDatasetAdapter
@@ -58,7 +58,7 @@ openml_adult_income:
     stratify: true
 
 openml_bank_marketing:
-  description: "Bank Marketing classification dataset from OpenML (data_id=45065)."
+  description: "Bank Marketing classification dataset from OpenML (data_id=1461) 45211 instances."
   adapter:
     module: src.datasets.adapters
     class: LoaderDatasetAdapter
@@ -74,7 +74,7 @@ openml_bank_marketing:
     stratify: true
 
 openml_german_credit:
-  description: "Classifies people described by a set of attributes as good or bad credit risks"
+  description: "Classifies people described by a set of attributes as good or bad credit risks 1000 instances (data_id=31)."
   adapter:
     module: src.datasets.adapters
     class: LoaderDatasetAdapter

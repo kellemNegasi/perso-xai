@@ -9,6 +9,7 @@ masking the most important features (according to the explanation), the more
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Sequence
 
 import numpy as np
@@ -24,6 +25,17 @@ _FEATURE_METHOD_KEYS = {
     "causal_shap",
     "causalshap",
 }
+
+
+@dataclass
+class _CorrectnessContext:
+    """Cached payload with everything needed to score an explanation."""
+
+    importance: np.ndarray
+    instance: np.ndarray
+    baseline: Optional[np.ndarray]
+    top_indices: np.ndarray
+    original_prediction: float
 
 
 class CorrectnessEvaluator(MetricCapabilities):
@@ -54,6 +66,8 @@ class CorrectnessEvaluator(MetricCapabilities):
         removal_fraction: float = 0.1,
         default_baseline: float = 0.0,
         min_features: int = 1,
+        fast_mode: bool = True,
+        cache_context: bool = True,
     ) -> None:
         """
         Parameters
@@ -82,6 +96,8 @@ class CorrectnessEvaluator(MetricCapabilities):
             self._removal_count = None
         self.default_baseline = float(default_baseline)
         self.min_features = max(1, int(min_features))
+        self.fast_mode = bool(fast_mode)
+        self.cache_context = bool(cache_context)
         self.logger = logging.getLogger(__name__)
 
     def evaluate(
@@ -146,16 +162,28 @@ class CorrectnessEvaluator(MetricCapabilities):
         if not explanations:
             return {"correctness": 0.0}
 
+        context_cache: Optional[Dict[int, _CorrectnessContext]] = (
+            {} if self.cache_context else None
+        )
+
         if metric_input.explanation_idx is not None:
             idx = metric_input.explanation_idx
             if not (0 <= idx < len(explanations)):
                 return {"correctness": 0.0}
-            score = self._feature_removal_score(metric_input.model, explanations[idx])
+            score = self._feature_removal_score(
+                metric_input.model,
+                explanations[idx],
+                context_cache,
+            )
             return {"correctness": float(score) if score is not None else 0.0}
 
         scores: List[float] = []
         for explanation in explanations:
-            score = self._feature_removal_score(metric_input.model, explanation)
+            score = self._feature_removal_score(
+                metric_input.model,
+                explanation,
+                context_cache,
+            )
             if score is not None:
                 scores.append(score)
 
@@ -166,8 +194,30 @@ class CorrectnessEvaluator(MetricCapabilities):
     # Internal helpers
     # ------------------------------------------------------------------ #
 
-    def _feature_removal_score(self, model: Any, explanation: Dict[str, Any]) -> Optional[float]:
+    def _feature_removal_score(
+        self,
+        model: Any,
+        explanation: Dict[str, Any],
+        context_cache: Optional[Dict[int, _CorrectnessContext]] = None,
+    ) -> Optional[float]:
         """Mask the most important features and return the resulting normalized drop."""
+        context = self._prepare_context(explanation, context_cache)
+        if context is None:
+            return None
+
+        if self.fast_mode:
+            return self._fast_feature_removal_score(model, explanation, context)
+        return self._slow_feature_removal_score(model, context)
+
+    def _prepare_context(
+        self,
+        explanation: Dict[str, Any],
+        context_cache: Optional[Dict[int, _CorrectnessContext]],
+    ) -> Optional[_CorrectnessContext]:
+        cache_key = id(explanation)
+        if context_cache is not None and cache_key in context_cache:
+            return context_cache[cache_key]
+
         importance_vec = self._feature_importance_vector(explanation)
         if importance_vec is None or importance_vec.size == 0:
             return None
@@ -176,16 +226,37 @@ class CorrectnessEvaluator(MetricCapabilities):
         if instance is None:
             return None
 
-        baseline = self._baseline_vector(explanation, instance)
         k = self._num_features_to_mask(len(importance_vec))
         top_indices = np.argsort(-np.abs(importance_vec))[:k]
 
-        perturbed = instance.copy()
-        perturbed[top_indices] = baseline[top_indices]
+        baseline = None
+        if not self.fast_mode:
+            baseline = self._baseline_vector(explanation, instance)
 
         orig_pred = self._prediction_value(explanation)
         if orig_pred is None:
             return None
+
+        context = _CorrectnessContext(
+            importance=importance_vec,
+            instance=instance,
+            baseline=baseline,
+            top_indices=top_indices,
+            original_prediction=orig_pred,
+        )
+        if context_cache is not None:
+            context_cache[cache_key] = context
+        return context
+
+    def _slow_feature_removal_score(
+        self,
+        model: Any,
+        context: _CorrectnessContext,
+    ) -> Optional[float]:
+        if context.baseline is None:
+            return None
+        perturbed = context.instance.copy()
+        perturbed[context.top_indices] = context.baseline[context.top_indices]
 
         try:
             new_pred = self._model_prediction(model, perturbed)
@@ -193,6 +264,31 @@ class CorrectnessEvaluator(MetricCapabilities):
             self.logger.debug("CorrectnessEvaluator failed to perturb instance: %s", exc)
             return None
 
+        return self._normalised_change(context.original_prediction, new_pred)
+
+    def _fast_feature_removal_score(
+        self,
+        model: Any,
+        explanation: Dict[str, Any],
+        context: _CorrectnessContext,
+    ) -> Optional[float]:
+        baseline = self._fast_baseline_vector(explanation, context.instance)
+        perturbed = context.instance.copy()
+        perturbed[context.top_indices] = baseline[context.top_indices]
+
+        orig_pred = self._fast_original_prediction(model, explanation, context)
+        if orig_pred is None:
+            return None
+
+        try:
+            new_pred = self._fast_model_prediction(model, perturbed)
+        except Exception as exc:
+            self.logger.debug("CorrectnessEvaluator fast mode failed: %s", exc)
+            return None
+
+        return self._normalised_change(orig_pred, new_pred)
+
+    def _normalised_change(self, orig_pred: float, new_pred: float) -> Optional[float]:
         change = abs(orig_pred - new_pred)
         denom = abs(orig_pred) + 1e-8
         if denom < 1e-12:
@@ -211,6 +307,50 @@ class CorrectnessEvaluator(MetricCapabilities):
             )
             return None
         return score
+
+    def _fast_original_prediction(
+        self,
+        model: Any,
+        explanation: Dict[str, Any],
+        context: _CorrectnessContext,
+    ) -> Optional[float]:
+        prediction = explanation.get("prediction")
+        if prediction is not None:
+            arr = np.asarray(prediction).ravel()
+            if arr.size:
+                try:
+                    return float(arr[0])
+                except Exception:
+                    pass
+        # Fallback to the richer probability-aware estimate prepared for the slow path.
+        if context.original_prediction is not None:
+            return float(context.original_prediction)
+        try:
+            return self._fast_model_prediction(model, context.instance)
+        except Exception:
+            return None
+
+    def _fast_model_prediction(self, model: Any, instance: np.ndarray) -> float:
+        batch = instance.reshape(1, -1)
+        if hasattr(model, "predict"):
+            preds = np.asarray(model.predict(batch)).ravel()
+            if preds.size == 0:
+                raise ValueError("Model.predict returned empty output.")
+            return float(preds[0])
+        return self._model_prediction(model, instance)
+
+    def _fast_baseline_vector(
+        self,
+        explanation: Dict[str, Any],
+        instance: np.ndarray,
+    ) -> np.ndarray:
+        metadata = explanation.get("metadata") or {}
+        baseline = metadata.get("baseline_instance")
+        if baseline is not None:
+            arr = np.asarray(baseline, dtype=float).reshape(-1)
+            if arr.shape == instance.shape:
+                return arr
+        return np.zeros_like(instance)
 
     def _num_features_to_mask(self, n_features: int) -> int:
         """

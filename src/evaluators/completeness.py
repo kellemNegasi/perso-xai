@@ -49,8 +49,9 @@ class CompletenessEvaluator(MetricCapabilities):
         *,
         magnitude_threshold: float = 1e-8,
         min_features: int = 1,
-        random_trials: int = 10,
+        random_trials: int = 5,
         default_baseline: float = 0.0,
+        fast_mode: bool = True,
         random_state: Optional[int] = None,
     ) -> None:
         """
@@ -74,6 +75,7 @@ class CompletenessEvaluator(MetricCapabilities):
         self.min_features = max(1, int(min_features))
         self.random_trials = max(0, int(random_trials))
         self.default_baseline = float(default_baseline)
+        self.fast_mode = bool(fast_mode)
         self._rng = np.random.default_rng(random_state)
         self.logger = logging.getLogger(__name__)
 
@@ -168,6 +170,12 @@ class CompletenessEvaluator(MetricCapabilities):
         return {key: 0.0 for key in self.metric_names}
 
     def _metrics_for_explanation(self, model: Any, explanation: Dict[str, Any]) -> Optional[Dict[str, float]]:
+        if self.fast_mode:
+            metrics = self._fast_metrics_for_explanation(explanation)
+            if metrics is not None:
+                return metrics
+            # fall back to exact computation if heuristic failed
+
         importance = self._importance_vector(explanation)
         if importance is None:
             return None
@@ -328,13 +336,120 @@ class CompletenessEvaluator(MetricCapabilities):
         if self.random_trials <= 0 or mask_size <= 0 or mask_size > n_features:
             return []
 
-        drops: List[float] = []
-        for _ in range(self.random_trials):
-            indices = self._rng.choice(n_features, size=mask_size, replace=False)
-            drop = self._normalized_drop(model, instance, baseline, indices, original_pred)
-            if drop is not None:
-                drops.append(drop)
-        return drops
+        trials = self.random_trials
+        batch = np.repeat(instance[np.newaxis, :], trials, axis=0)
+        for row in range(trials):
+            indices = self._rng.permutation(n_features)[:mask_size]
+            batch[row, indices] = baseline[indices]
+
+        try:
+            preds = self._model_predictions(model, batch)
+        except Exception as exc:
+            self.logger.debug("CompletenessEvaluator random baseline failed: %s", exc)
+            return []
+
+        denom = abs(original_pred) + 1e-8
+        if denom < 1e-12:
+            return []
+        drops = np.abs(original_pred - preds) / denom
+        drops = drops[np.isfinite(drops)]
+        valid = np.clip(drops, 0.0, 1.0)
+        return valid.tolist()
+
+    def _model_predictions(self, model: Any, instances: np.ndarray) -> np.ndarray:
+        if hasattr(model, "predict_proba"):
+            proba = np.asarray(model.predict_proba(instances))
+            if proba.ndim == 1:
+                return proba.astype(float)
+            if proba.shape[1] == 2:
+                return proba[:, 1].astype(float)
+            return np.max(proba, axis=1).astype(float)
+        if hasattr(model, "predict"):
+            preds = np.asarray(model.predict(instances)).reshape(instances.shape[0])
+            return preds.astype(float)
+        raise AttributeError("Model must expose predict() or predict_proba().")
+
+    def _fast_metrics_for_explanation(
+        self, explanation: Dict[str, Any]
+    ) -> Optional[Dict[str, float]]:
+        importance = self._importance_vector(explanation)
+        if importance is None or importance.size == 0:
+            return None
+
+        metadata = explanation.get("metadata") or {}
+        text_content = explanation.get("text_content") or metadata.get("text_content")
+
+        if text_content:
+            score = self._text_completeness_score(text_content, importance)
+            return {
+                "completeness_drop": score,
+                "completeness_random_drop": 0.0,
+                "completeness_score": score,
+            }
+
+        prediction_value = self._prediction_value(explanation)
+        if prediction_value is None:
+            return None
+
+        baseline_prediction = metadata.get("baseline_prediction")
+        if baseline_prediction is None:
+            baseline_prediction = metadata.get("expected_value")
+        if isinstance(baseline_prediction, (list, tuple, np.ndarray)):
+            baseline_arr = np.asarray(baseline_prediction).ravel()
+            baseline_prediction = float(baseline_arr[0]) if baseline_arr.size else 0.0
+        if baseline_prediction is None:
+            baseline_prediction = 0.0
+
+        score = self._tabular_completeness_score(
+            importance, prediction_value, float(baseline_prediction)
+        )
+        return {
+            "completeness_drop": score,
+            "completeness_random_drop": 0.0,
+            "completeness_score": score,
+        }
+
+    def _text_completeness_score(self, text: str, importance: np.ndarray) -> float:
+        words = text.split()
+        if not words:
+            return 0.0
+        vec = np.abs(importance[: len(words)])
+        if vec.size == 0:
+            return 0.0
+
+        percentile_threshold = np.percentile(vec, 80)
+        important_words = np.count_nonzero(vec >= percentile_threshold)
+        coverage = important_words / len(words)
+
+        total = float(np.sum(vec))
+        if total > 1e-12:
+            normalized = vec / total
+            entropy = -np.sum(normalized * np.log(normalized + 1e-10))
+            max_entropy = np.log(len(words)) if len(words) > 1 else 0.0
+            entropy_score = entropy / max_entropy if max_entropy > 0 else 0.0
+            simpson = np.sum(normalized**2)
+            effective_words = 1.0 / simpson if simpson > 0 else len(words)
+            effective_score = effective_words / len(words)
+        else:
+            entropy_score = 0.0
+            effective_score = 0.0
+
+        score = np.mean([coverage, entropy_score, effective_score])
+        return float(np.clip(score, 0.0, 1.0))
+
+    def _tabular_completeness_score(
+        self,
+        importance: np.ndarray,
+        prediction_value: float,
+        baseline_prediction: float,
+    ) -> float:
+        sum_attributions = float(np.sum(importance))
+        output_diff = float(prediction_value - baseline_prediction)
+        if abs(output_diff) > 1e-8:
+            score = 1.0 - abs(sum_attributions - output_diff) / abs(output_diff)
+        else:
+            score = 1.0 if abs(sum_attributions) < 1e-8 else 0.0
+        return float(np.clip(score, 0.0, 1.0))
 
     def _model_prediction(self, model: Any, instance: np.ndarray) -> float:
         batch = instance.reshape(1, -1)

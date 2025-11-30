@@ -4,6 +4,7 @@ correctness:
   params:
     removal_fraction: 0.1    # float=fraction of top features, int=absolute count
     default_baseline: 0.0    # value used when no baseline vector is provided
+    fast_mode: false   # flip back to the slow Quantus-style path
 
 output_completeness_deletion:
   module: src.evaluators.correctness

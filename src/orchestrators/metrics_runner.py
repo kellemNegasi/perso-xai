@@ -47,6 +47,8 @@ def run_experiment(
     model_store_dir: Optional[str | Path] = None,
     stop_after_training: bool = False,
     stop_after_explanations: bool = False,
+    write_detailed_explanations: bool = False,
+    detailed_output_dir: Optional[str | Path] = None,
 ) -> Dict[str, Any]:
     """
     Execute a configured experiment (dataset/model/explainers/metrics).
@@ -73,6 +75,10 @@ def run_experiment(
         Halt the pipeline after tuning/training (no explanations or metrics).
     stop_after_explanations : bool, optional
         Generate explanations but skip metric computation/evaluation.
+    write_detailed_explanations : bool, optional
+        Persist per-explainer instance-level outputs to disk.
+    detailed_output_dir : str | Path | None, optional
+        Base directory where detailed explanation JSON files are written.
 
     Returns
     -------
@@ -139,6 +145,7 @@ def run_experiment(
         batch_metrics_data: Dict[str, Dict[str, float]],
         metadata_data: Dict[str, Dict[int, Any]],
         stage_completed: str,
+        detailed_paths: Optional[Dict[str, str]] = None,
     ) -> Dict[str, Any]:
         metadata_serialized = {
             method: meta for method, meta in metadata_data.items() if meta
@@ -152,6 +159,7 @@ def run_experiment(
             "batch_metrics": batch_metrics_data,
             "explanation_metadata": metadata_serialized,
             "stage_completed": stage_completed,
+            "detailed_explanations": detailed_paths or {},
         }
         if output_path is not None:
             path = Path(output_path)
@@ -221,6 +229,7 @@ def run_experiment(
             batch_metrics_data={},
             metadata_data={},
             stage_completed="training",
+            detailed_paths={},
         )
 
     X_eval = dataset.X_test
@@ -249,6 +258,13 @@ def run_experiment(
 
     # Compute the explanations and batch-level metrics first.
     explainer_outputs: Dict[str, Dict[str, Any]] = {}
+    detailed_records: Dict[str, List[Dict[str, Any]]] = {}
+    detailed_paths: Dict[str, str] = {}
+    detailed_dir: Optional[Path] = None
+    if write_detailed_explanations:
+        resolved_dir = Path(detailed_output_dir or Path("saved_models") / "detailed_explanations")
+        detailed_dir = resolved_dir / dataset_name / model_name
+        detailed_dir.mkdir(parents=True, exist_ok=True)
     for expl_name in explainer_names:
         LOGGER.info("Generating explanations with '%s'", expl_name)
         explainer = instantiate_explainer(
@@ -354,6 +370,29 @@ def run_experiment(
 
             explainer_records.append(explanation_entry)
 
+            if write_detailed_explanations and detailed_dir is not None:
+                predicted_label = inst_record["predicted_label"]
+                predicted_proba = inst_record.get("predicted_proba")
+                true_label = inst_record.get("true_label")
+                correct_prediction = (
+                    true_label is not None and predicted_label == true_label
+                )
+                record = {
+                    "instance_id": idx,
+                    "dataset_index": dataset_idx_int,
+                    "true_label": true_label,
+                    "prediction": predicted_label,
+                    "prediction_proba": predicted_proba,
+                    "correct_prediction": correct_prediction,
+                    "feature_names": feature_names,
+                    "feature_importance": attribution_values,
+                    "metadata": to_serializable(metadata) if metadata else {},
+                    "metrics": metrics_for_explainer,
+                }
+                if gen_time is not None:
+                    record["generation_time"] = float(gen_time)
+                detailed_records.setdefault(method_label, []).append(record)
+
         inst_record["explanations"] = explainer_records
         instances.append(inst_record)
 
@@ -362,12 +401,20 @@ def run_experiment(
         method_label = data["results"].get("method", expl_name)
         batch_metrics_result[method_label] = data["batch_metrics"]
 
+    if write_detailed_explanations and detailed_dir is not None:
+        for method_label, records in detailed_records.items():
+            file_path = detailed_dir / f"{method_label}_detailed_explanations.json"
+            with file_path.open("w", encoding="utf-8") as handle:
+                json.dump(to_serializable(records), handle, indent=2)
+            detailed_paths[method_label] = str(file_path)
+
     stage_label = "explanations" if stop_after_explanations else "metrics"
     return _finalize(
         instances_data=instances,
         batch_metrics_data=batch_metrics_result,
         metadata_data=explanation_metadata,
         stage_completed=stage_label,
+        detailed_paths=detailed_paths,
     )
 
 
@@ -383,6 +430,8 @@ def run_experiments(
     model_store_dir: Optional[str | Path] = None,
     stop_after_training: bool = False,
     stop_after_explanations: bool = False,
+    write_detailed_explanations: bool = False,
+    detailed_output_dir: Optional[str | Path] = None,
 ) -> List[Dict[str, Any]]:
     """
     Run multiple experiments sequentially.
@@ -409,6 +458,10 @@ def run_experiments(
         Halt each experiment after training completes.
     stop_after_explanations : bool, optional
         Run explainers but skip metrics for each experiment.
+    write_detailed_explanations : bool, optional
+        Persist per-explainer JSON files for every dataset/model pair.
+    detailed_output_dir : str | Path | None, optional
+        Base directory for detailed explanation artifacts.
 
     Returns
     -------
@@ -447,6 +500,8 @@ def run_experiments(
                 model_store_dir=model_store_dir,
                 stop_after_training=stop_after_training,
                 stop_after_explanations=stop_after_explanations,
+                write_detailed_explanations=write_detailed_explanations,
+                detailed_output_dir=detailed_output_dir,
             )
             results.append(experiment_result)
     return results

@@ -13,6 +13,7 @@ from src.orchestrators.metrics_runner import run_experiment, run_experiments
 DEFAULT_MODEL_STORE_DIR = Path("saved_models")
 DEFAULT_TUNING_OUTPUT_DIR = DEFAULT_MODEL_STORE_DIR / "tuning_results"
 DEFAULT_RESULTS_DIR = DEFAULT_MODEL_STORE_DIR / "experiment_results"
+DEFAULT_DETAILED_OUTPUT_DIR = DEFAULT_MODEL_STORE_DIR / "detailed_explanations"
 
 
 def _positive_int(value: str) -> int:
@@ -98,6 +99,17 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Run explainers but skip all metric evaluations.",
     )
+    parser.add_argument(
+        "--write-detailed-explanations",
+        action="store_true",
+        help="Persist per-explainer JSON files under the detailed explanations directory.",
+    )
+    parser.add_argument(
+        "--detailed-output-dir",
+        type=Path,
+        default=DEFAULT_DETAILED_OUTPUT_DIR,
+        help=f"Directory for per-explainer detailed explanations (default: {DEFAULT_DETAILED_OUTPUT_DIR}).",
+    )
     return parser
 
 
@@ -130,6 +142,8 @@ def _run_with_model_override(
     reuse_trained_models: bool,
     tuning_output_dir: Path | None,
     model_store_dir: Path | None,
+    write_detailed_explanations: bool,
+    detailed_output_dir: Path | None,
     stop_after_training: bool,
     stop_after_explanations: bool,
 ) -> List[dict]:
@@ -150,6 +164,8 @@ def _run_with_model_override(
                 reuse_trained_models=reuse_trained_models,
                 tuning_output_dir=tuning_output_dir,
                 model_store_dir=model_store_dir,
+                write_detailed_explanations=write_detailed_explanations,
+                detailed_output_dir=detailed_output_dir,
                 stop_after_training=stop_after_training,
                 stop_after_explanations=stop_after_explanations,
             )
@@ -186,8 +202,15 @@ def main(argv: Sequence[str] | None = None) -> int:
     cli_args = list(argv) if argv is not None else sys.argv[1:]
     logger.debug("CLI arguments: %s", cli_args)
     output_dir = _ensure_output_dir(args.output_dir)
+    tuning_output_dir = _ensure_output_dir(args.tuning_output_dir)
+    model_store_dir = _ensure_output_dir(args.model_store_dir)
+    detailed_output_dir = (
+        _ensure_output_dir(args.detailed_output_dir)
+        if args.write_detailed_explanations
+        else args.detailed_output_dir
+    )
     logger.info(
-        "Requested experiments=%s max_instances=%s model_override=%s tune=%s use_tuned=%s reuse_models=%s stop_after_training=%s stop_after_explanations=%s",
+        "Requested experiments=%s max_instances=%s model_override=%s tune=%s use_tuned=%s reuse_models=%s stop_after_training=%s stop_after_explanations=%s write_detailed=%s",
         args.experiments,
         args.max_instances,
         args.model,
@@ -196,6 +219,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         args.reuse_trained_models,
         args.stop_after_training,
         args.stop_after_explanations,
+        args.write_detailed_explanations,
     )
 
     if args.model:
@@ -207,8 +231,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             tune_models=args.tune_models,
             use_tuned_params=args.use_tuned_params,
             reuse_trained_models=args.reuse_trained_models,
-            tuning_output_dir=args.tuning_output_dir,
-            model_store_dir=args.model_store_dir,
+            tuning_output_dir=tuning_output_dir,
+            model_store_dir=model_store_dir,
+            write_detailed_explanations=args.write_detailed_explanations,
+            detailed_output_dir=detailed_output_dir,
             stop_after_training=args.stop_after_training,
             stop_after_explanations=args.stop_after_explanations,
         )
@@ -220,8 +246,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             tune_models=args.tune_models,
             use_tuned_params=args.use_tuned_params,
             reuse_trained_models=args.reuse_trained_models,
-            tuning_output_dir=args.tuning_output_dir,
-            model_store_dir=args.model_store_dir,
+            tuning_output_dir=tuning_output_dir,
+            model_store_dir=model_store_dir,
+            write_detailed_explanations=args.write_detailed_explanations,
+            detailed_output_dir=detailed_output_dir,
             stop_after_training=args.stop_after_training,
             stop_after_explanations=args.stop_after_explanations,
         )

@@ -110,6 +110,22 @@ def build_parser() -> argparse.ArgumentParser:
         default=DEFAULT_DETAILED_OUTPUT_DIR,
         help=f"Directory for per-explainer detailed explanations (default: {DEFAULT_DETAILED_OUTPUT_DIR}).",
     )
+    parser.add_argument(
+        "--reuse-detailed-explanations",
+        action="store_true",
+        help="When possible, load cached detailed explanation files instead of recomputing.",
+    )
+    parser.add_argument(
+        "--write-metric-results",
+        action="store_true",
+        help="Store per-method metric outputs under the structured metrics directory.",
+    )
+    parser.add_argument(
+        "--metrics-output-dir",
+        type=Path,
+        default=DEFAULT_MODEL_STORE_DIR / "metrics_results",
+        help="Directory for per-method metric JSON artifacts (default: saved_models/metrics_results).",
+    )
     return parser
 
 
@@ -144,6 +160,9 @@ def _run_with_model_override(
     model_store_dir: Path | None,
     write_detailed_explanations: bool,
     detailed_output_dir: Path | None,
+    reuse_detailed_explanations: bool,
+    write_metric_results: bool,
+    metrics_output_dir: Path | None,
     stop_after_training: bool,
     stop_after_explanations: bool,
 ) -> List[dict]:
@@ -166,6 +185,9 @@ def _run_with_model_override(
                 model_store_dir=model_store_dir,
                 write_detailed_explanations=write_detailed_explanations,
                 detailed_output_dir=detailed_output_dir,
+                reuse_detailed_explanations=reuse_detailed_explanations,
+                write_metric_results=write_metric_results,
+                metrics_output_dir=metrics_output_dir,
                 stop_after_training=stop_after_training,
                 stop_after_explanations=stop_after_explanations,
             )
@@ -235,6 +257,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             model_store_dir=model_store_dir,
             write_detailed_explanations=args.write_detailed_explanations,
             detailed_output_dir=detailed_output_dir,
+            reuse_detailed_explanations=args.reuse_detailed_explanations,
+            write_metric_results=args.write_metric_results,
+            metrics_output_dir=args.metrics_output_dir,
             stop_after_training=args.stop_after_training,
             stop_after_explanations=args.stop_after_explanations,
         )
@@ -250,6 +275,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             model_store_dir=model_store_dir,
             write_detailed_explanations=args.write_detailed_explanations,
             detailed_output_dir=detailed_output_dir,
+            reuse_detailed_explanations=args.reuse_detailed_explanations,
+            write_metric_results=args.write_metric_results,
+            metrics_output_dir=args.metrics_output_dir,
             stop_after_training=args.stop_after_training,
             stop_after_explanations=args.stop_after_explanations,
         )

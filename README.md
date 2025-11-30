@@ -27,6 +27,11 @@ The runner pulls the dataset/model/explainer/metric configs from `src/configs/*.
 
 ## Current Explainers
 
+Every explainer now limits itself to a small, randomly sampled subset of the evaluation set (`experiment.explanation.max_instances`, default `1`). The underlying dataset is sampled without replacement using the explainer’s configured `sampling_strategy` (default `random`) so every run still draws from the full test distribution while keeping runtimes manageable. Adjust those knobs in `src/configs/explainers.yml` if you need more than one instance or want deterministic (sequential) selection.
+
+### Structured Outputs
+Use `--write-detailed-explanations` to persist per-instance explanation payloads under `saved_models/detailed_explanations/<dataset>/<model>/<method>_detailed_explanations.json`. Re-run metrics without recomputing explainers by passing `--reuse-detailed-explanations`; the orchestrator will load any cached files before invoking the explainer. To emit per-method metric artifacts, add `--write-metric-results` (optionally override `--metrics-output-dir`): each metric run writes `saved_models/metrics_results/<dataset>/<model>/<method>_metrics.json` containing the instance-level scores, batch metrics, and evaluator metadata.
+
 ### SHAP (`shap`)
 Hybrid Tree/Kernel SHAP implementation [(`src/explainers/shap_explainer.py`)](src/explainers/shap_explainer.py). Tree models use `shap.TreeExplainer`; other models fall back to Kernel SHAP with a randomly sampled background set. Parameter: `background_sample_size` (default 100) controls how many training points form the background distribution for Kernel SHAP; larger values reduce variance but increase runtime.
 

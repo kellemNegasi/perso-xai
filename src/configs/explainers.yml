@@ -10,6 +10,8 @@ shap:
   params:
     experiment:
       explanation:
+        max_instances: 1
+        sampling_strategy: random
         background_sample_size: 100
 
 lime:
@@ -19,6 +21,8 @@ lime:
   params:
     experiment:
       explanation:
+        max_instances: 1
+        sampling_strategy: random
         lime_num_samples: 500
         lime_noise_scale: 0.1
         lime_kernel_width: 2.0
@@ -30,6 +34,8 @@ integrated_gradients:
   params:
     experiment:
       explanation:
+        max_instances: 1
+        sampling_strategy: random
         ig_steps: 30 # Sundararajan et al suggest that that somewhere between 20 and 300 steps are enough to approximate the integral (within 5%),.
         ig_epsilon: 0.001
 
@@ -40,5 +46,7 @@ causal_shap:
   params:
     experiment:
       explanation:
+        max_instances: 1
+        sampling_strategy: random
         causal_shap_corr_threshold: 0.3
         causal_shap_coalitions: 50

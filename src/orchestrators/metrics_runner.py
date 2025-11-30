@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import json
 import logging
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 
@@ -49,6 +50,9 @@ def run_experiment(
     stop_after_explanations: bool = False,
     write_detailed_explanations: bool = False,
     detailed_output_dir: Optional[str | Path] = None,
+    reuse_detailed_explanations: bool = False,
+    write_metric_results: bool = False,
+    metrics_output_dir: Optional[str | Path] = None,
 ) -> Dict[str, Any]:
     """
     Execute a configured experiment (dataset/model/explainers/metrics).
@@ -79,6 +83,12 @@ def run_experiment(
         Persist per-explainer instance-level outputs to disk.
     detailed_output_dir : str | Path | None, optional
         Base directory where detailed explanation JSON files are written.
+    reuse_detailed_explanations : bool, optional
+        Load cached detailed explanation files when present instead of recomputing.
+    write_metric_results : bool, optional
+        Persist per-method metric artifacts to disk.
+    metrics_output_dir : str | Path | None, optional
+        Base directory for structured metric outputs.
 
     Returns
     -------
@@ -146,6 +156,7 @@ def run_experiment(
         metadata_data: Dict[str, Dict[int, Any]],
         stage_completed: str,
         detailed_paths: Optional[Dict[str, str]] = None,
+        metric_paths: Optional[Dict[str, str]] = None,
     ) -> Dict[str, Any]:
         metadata_serialized = {
             method: meta for method, meta in metadata_data.items() if meta
@@ -160,6 +171,7 @@ def run_experiment(
             "explanation_metadata": metadata_serialized,
             "stage_completed": stage_completed,
             "detailed_explanations": detailed_paths or {},
+            "per_method_metric_files": metric_paths or {},
         }
         if output_path is not None:
             path = Path(output_path)
@@ -255,22 +267,60 @@ def run_experiment(
         metric_caps = {
             name: metric_capabilities(metric) for name, metric in metric_objs.items()
         }
+    metric_metadata: Dict[str, Dict[str, Any]] = {}
+    if metric_objs:
+        for name, metric in metric_objs.items():
+            metric_metadata[name] = {
+                "class": metric.__class__.__name__,
+                "per_instance": metric_caps[name]["per_instance"],
+                "requires_full_batch": metric_caps[name]["requires_full_batch"],
+                "parameters": _extract_metric_parameters(metric),
+            }
 
     # Compute the explanations and batch-level metrics first.
     explainer_outputs: Dict[str, Dict[str, Any]] = {}
     detailed_records: Dict[str, List[Dict[str, Any]]] = {}
     detailed_paths: Dict[str, str] = {}
     detailed_dir: Optional[Path] = None
-    if write_detailed_explanations:
+    if write_detailed_explanations or reuse_detailed_explanations:
         resolved_dir = Path(detailed_output_dir or Path("saved_models") / "detailed_explanations")
-        detailed_dir = resolved_dir / dataset_name / model_name
+        dataset_dir = resolved_dir / dataset_name
+        dataset_dir.mkdir(parents=True, exist_ok=True)
+        _ensure_dataset_metadata(dataset_dir, dataset_name, dataset_type, feature_names)
+        detailed_dir = dataset_dir / model_name
         detailed_dir.mkdir(parents=True, exist_ok=True)
+
+    metric_instance_records: Dict[str, List[Dict[str, Any]]] = {}
+    metric_paths: Dict[str, str] = {}
+    metrics_dir: Optional[Path] = None
+    if write_metric_results:
+        resolved_metrics = Path(metrics_output_dir or Path("saved_models") / "metrics_results")
+        dataset_metrics_dir = resolved_metrics / dataset_name
+        dataset_metrics_dir.mkdir(parents=True, exist_ok=True)
+        _ensure_dataset_metadata(dataset_metrics_dir, dataset_name, dataset_type, feature_names)
+        metrics_dir = dataset_metrics_dir / model_name
+        metrics_dir.mkdir(parents=True, exist_ok=True)
     for expl_name in explainer_names:
         LOGGER.info("Generating explanations with '%s'", expl_name)
         explainer = instantiate_explainer(
             expl_name, model, dataset, data_type=dataset_type, logging_cfg=logging_cfg
         )
-        expl_results = explainer.explain_dataset(X_eval, y_eval)
+        reused_explanations = False
+        cached_path: Optional[Path] = None
+        expl_results = None
+        if reuse_detailed_explanations and detailed_dir is not None:
+            cached_path = detailed_dir / f"{expl_name}_detailed_explanations.json"
+            cached = _load_cached_explanations(cached_path, expl_name)
+            if cached is not None:
+                expl_results = cached
+                reused_explanations = True
+                cached_method = cached.get("method", expl_name)
+                detailed_paths[cached_method] = str(cached_path)
+
+        if expl_results is None:
+            expl_results = explainer.explain_dataset(X_eval, y_eval)
+
+        method_label = expl_results.get("method", expl_name)
 
         batch_metrics: Dict[str, float] = {}
         if metric_objs:
@@ -292,6 +342,9 @@ def run_experiment(
             "explainer": explainer,
             "results": expl_results,
             "batch_metrics": batch_metrics,
+            "method_label": method_label,
+            "reused": reused_explanations,
+            "cached_path": str(cached_path) if reused_explanations and cached_path else None,
         }
 
     # Collect per-instance metrics and assemble the final output structure.
@@ -393,6 +446,19 @@ def run_experiment(
                     record["generation_time"] = float(gen_time)
                 detailed_records.setdefault(method_label, []).append(record)
 
+            if write_metric_results:
+                metric_entry = {
+                    "instance_id": int(dataset_idx_int),
+                    "dataset_index": int(dataset_idx_int),
+                    "true_label": inst_record.get("true_label"),
+                    "prediction": inst_record.get("predicted_label"),
+                    "metrics": metrics_for_explainer,
+                    "metric_metadata": {
+                        "evaluated_metrics": list(metrics_for_explainer.keys()),
+                    },
+                }
+                metric_instance_records.setdefault(method_label, []).append(metric_entry)
+
         inst_record["explanations"] = explainer_records
         instances.append(inst_record)
 
@@ -408,6 +474,22 @@ def run_experiment(
                 json.dump(to_serializable(records), handle, indent=2)
             detailed_paths[method_label] = str(file_path)
 
+    if write_metric_results and metrics_dir is not None:
+        for method_label in set(list(metric_instance_records.keys()) + list(batch_metrics_result.keys())):
+            records = metric_instance_records.get(method_label, [])
+            batch_metrics = batch_metrics_result.get(method_label, {})
+            path = _write_metric_results(
+                metrics_dir=metrics_dir,
+                dataset_name=dataset_name,
+                model_name=model_name,
+                method_label=method_label,
+                instances=records,
+                batch_metrics=batch_metrics,
+                metric_metadata=metric_metadata,
+            )
+            if path:
+                metric_paths[method_label] = path
+
     stage_label = "explanations" if stop_after_explanations else "metrics"
     return _finalize(
         instances_data=instances,
@@ -415,6 +497,7 @@ def run_experiment(
         metadata_data=explanation_metadata,
         stage_completed=stage_label,
         detailed_paths=detailed_paths,
+        metric_paths=metric_paths,
     )
 
 
@@ -432,6 +515,9 @@ def run_experiments(
     stop_after_explanations: bool = False,
     write_detailed_explanations: bool = False,
     detailed_output_dir: Optional[str | Path] = None,
+    reuse_detailed_explanations: bool = False,
+    write_metric_results: bool = False,
+    metrics_output_dir: Optional[str | Path] = None,
 ) -> List[Dict[str, Any]]:
     """
     Run multiple experiments sequentially.
@@ -462,6 +548,12 @@ def run_experiments(
         Persist per-explainer JSON files for every dataset/model pair.
     detailed_output_dir : str | Path | None, optional
         Base directory for detailed explanation artifacts.
+    reuse_detailed_explanations : bool, optional
+        Load cached detailed explanation files when available.
+    write_metric_results : bool, optional
+        Persist per-method metric outputs alongside explanations.
+    metrics_output_dir : str | Path | None, optional
+        Base directory for structured metric results.
 
     Returns
     -------
@@ -502,6 +594,9 @@ def run_experiments(
                 stop_after_explanations=stop_after_explanations,
                 write_detailed_explanations=write_detailed_explanations,
                 detailed_output_dir=detailed_output_dir,
+                reuse_detailed_explanations=reuse_detailed_explanations,
+                write_metric_results=write_metric_results,
+                metrics_output_dir=metrics_output_dir,
             )
             results.append(experiment_result)
     return results
@@ -635,6 +730,112 @@ def _resolve_tuning_subset(
         max_count if max_count is not None else "full",
     )
     return X_train[indices], None if y_train is None else y_train[indices]
+
+
+def _ensure_dataset_metadata(
+    dataset_dir: Path,
+    dataset_name: str,
+    dataset_type: str,
+    feature_names: List[str],
+) -> None:
+    meta_path = dataset_dir / "metadata.json"
+    if meta_path.exists():
+        return
+    payload = {
+        "dataset": dataset_name,
+        "dataset_type": dataset_type,
+        "n_features": len(feature_names),
+        "feature_names": feature_names,
+        "generated_at": datetime.utcnow().isoformat(),
+    }
+    meta_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+
+
+def _load_cached_explanations(file_path: Path, method_label: str) -> Optional[Dict[str, Any]]:
+    if not file_path.exists():
+        return None
+    try:
+        raw_records = json.loads(file_path.read_text(encoding="utf-8"))
+    except Exception as exc:  # pragma: no cover - defensive logging
+        LOGGER.warning("Failed to load cached explanations from %s: %s", file_path, exc)
+        return None
+
+    explanations: List[Dict[str, Any]] = []
+    for record in raw_records:
+        metadata = dict(record.get("metadata") or {})
+        dataset_idx = record.get("dataset_index")
+        if dataset_idx is not None:
+            metadata.setdefault("dataset_index", dataset_idx)
+        explanation_entry: Dict[str, Any] = {
+            "method": method_label,
+            "attributions": record.get("feature_importance") or [],
+            "metadata": metadata,
+            "metadata_key": dataset_idx if dataset_idx is not None else record.get("instance_id"),
+        }
+        gen_time = record.get("generation_time")
+        if gen_time is not None:
+            explanation_entry["generation_time"] = float(gen_time)
+        explanations.append(explanation_entry)
+
+    return {
+        "method": method_label,
+        "explanations": explanations,
+        "n_explanations": len(explanations),
+        "info": {
+            "source": "cached_file",
+            "path": str(file_path),
+        },
+    }
+
+
+def _extract_metric_parameters(metric: Any) -> Dict[str, Any]:
+    params: Dict[str, Any] = {}
+    attr_dict = getattr(metric, "__dict__", {})
+    for key, value in attr_dict.items():
+        if key.startswith("_"):
+            continue
+        if _is_jsonable(value):
+            params[key] = value
+    return params
+
+
+def _is_jsonable(value: Any) -> bool:
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return True
+    if isinstance(value, (list, tuple)):
+        return all(_is_jsonable(v) for v in value)
+    if isinstance(value, dict):
+        return all(isinstance(k, str) for k in value.keys()) and all(
+            _is_jsonable(v) for v in value.values()
+        )
+    return False
+
+
+def _write_metric_results(
+    *,
+    metrics_dir: Path,
+    dataset_name: str,
+    model_name: str,
+    method_label: str,
+    instances: List[Dict[str, Any]],
+    batch_metrics: Dict[str, float],
+    metric_metadata: Dict[str, Dict[str, Any]],
+) -> Optional[str]:
+    if not instances and not batch_metrics:
+        return None
+    payload = {
+        "dataset": dataset_name,
+        "model": model_name,
+        "method": method_label,
+        "generated_at": datetime.utcnow().isoformat(),
+        "metric_metadata": metric_metadata,
+        "instances": instances,
+        "batch_metrics": batch_metrics,
+    }
+    file_path = metrics_dir / f"{method_label}_metrics.json"
+    with file_path.open("w", encoding="utf-8") as handle:
+        json.dump(to_serializable(payload), handle, indent=2)
+    return str(file_path)
 
 
 def _coerce_metric_dict(values: Optional[Dict[str, Any]]) -> Dict[str, float]:

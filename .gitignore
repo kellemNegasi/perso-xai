@@ -29,5 +29,5 @@ Thumbs.db
 *.swo
 */cache
 *.pdf
-*.json
-.txt
+*.txt
+!./saved_models/*.json

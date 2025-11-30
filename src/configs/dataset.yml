@@ -138,7 +138,7 @@ datasets:
   open_compas:
     <<: *tabular_dataset
     source: openml:data_id=44162
-    description: "ProPublica COMPAS recidivism dataset."
+    description: "ProPublica COMPAS recidivism dataset. 16644 instances"
     loader:
       module: src.datasets.compas
       factory: load_compas_dataset

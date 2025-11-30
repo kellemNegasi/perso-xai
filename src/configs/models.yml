@@ -29,6 +29,19 @@ logistic_regression:
   fit:
     requires_scaler: true
 
+decision_tree:
+  <<: *tabular_model
+  description: "Single decision tree classifier baseline."
+  module: sklearn.tree
+  class: DecisionTreeClassifier
+  params:
+    max_depth: null
+    min_samples_split: 2
+    min_samples_leaf: 1
+    random_state: 42
+  fit:
+    requires_scaler: false
+
 gradient_boosting:
   <<: *tabular_model
   description: "Gradient Boosting classifier for structured data."

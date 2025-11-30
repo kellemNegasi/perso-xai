@@ -84,7 +84,10 @@ openml_adult_suite:
   dataset:
     key: openml_adult_income
   models:
+    - key: decision_tree
     - key: random_forest
+    - key: gradient_boosting
+    - key: mlp_classifier
     - key: hist_gradient_boosting
     - key: svm_rbf
   logging:
@@ -95,7 +98,10 @@ openml_bank_suite:
   dataset:
     key: openml_bank_marketing
   models:
+    - key: decision_tree
     - key: random_forest
+    - key: gradient_boosting
+    - key: mlp_classifier
     - key: hist_gradient_boosting
     - key: svm_rbf
   logging:
@@ -106,7 +112,10 @@ openml_german_suite:
   dataset:
     key: openml_german_credit
   models:
+    - key: decision_tree
     - key: random_forest
+    - key: gradient_boosting
+    - key: mlp_classifier
     - key: hist_gradient_boosting
     - key: svm_rbf
   logging:

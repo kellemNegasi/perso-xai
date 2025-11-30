@@ -10,6 +10,10 @@ from typing import Iterable, List, Sequence
 import sys
 from src.orchestrators.metrics_runner import run_experiment, run_experiments
 
+DEFAULT_MODEL_STORE_DIR = Path("saved_models")
+DEFAULT_TUNING_OUTPUT_DIR = DEFAULT_MODEL_STORE_DIR / "tuning_results"
+DEFAULT_RESULTS_DIR = DEFAULT_MODEL_STORE_DIR / "experiment_results"
+
 
 def _positive_int(value: str) -> int:
     try:
@@ -39,8 +43,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--output-dir",
         type=Path,
-        default=None,
-        help="Directory where JSON results should be written (one file per experiment).",
+        default=DEFAULT_RESULTS_DIR,
+        help=f"Directory where JSON results should be written (default: {DEFAULT_RESULTS_DIR}).",
     )
     parser.add_argument(
         "--model",
@@ -75,14 +79,14 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--tuning-output-dir",
         type=Path,
-        default=None,
-        help="Directory for hyperparameter tuning artifacts (defaults to saved_models/tuning_results).",
+        default=DEFAULT_TUNING_OUTPUT_DIR,
+        help=f"Directory for hyperparameter tuning artifacts (default: {DEFAULT_TUNING_OUTPUT_DIR}).",
     )
     parser.add_argument(
         "--model-store-dir",
         type=Path,
-        default=None,
-        help="Directory for serialized trained models (defaults to saved_models).",
+        default=DEFAULT_MODEL_STORE_DIR,
+        help=f"Directory for serialized trained models (default: {DEFAULT_MODEL_STORE_DIR}).",
     )
     parser.add_argument(
         "--stop-after-training",

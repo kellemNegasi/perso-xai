@@ -51,6 +51,8 @@ class SklearnModel(BaseModel[Any]):
         return self._estimator.predict_proba(X)
 
     def __getattr__(self, item: str) -> Any:
+        if item.startswith("__") or self._estimator is None:
+            raise AttributeError(item)
         # Delegate everything else to the underlying estimator (e.g., feature_importances_).
         return getattr(self._estimator, item)
 

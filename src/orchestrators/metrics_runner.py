@@ -279,9 +279,9 @@ def run_experiment(
 
     # Compute the explanations and batch-level metrics first.
     explainer_outputs: Dict[str, Dict[str, Any]] = {}
-    detailed_records: Dict[str, List[Dict[str, Any]]] = {}
     detailed_paths: Dict[str, str] = {}
     detailed_dir: Optional[Path] = None
+    detailed_writers: Dict[str, "_IncrementalJSONWriter"] = {}
     if write_detailed_explanations or reuse_detailed_explanations:
         resolved_dir = Path(detailed_output_dir or Path("saved_models") / "detailed_explanations")
         dataset_dir = resolved_dir / dataset_name
@@ -346,6 +346,14 @@ def run_experiment(
             "reused": reused_explanations,
             "cached_path": str(cached_path) if reused_explanations and cached_path else None,
         }
+        if (
+            write_detailed_explanations
+            and detailed_dir is not None
+            and not reused_explanations
+            and method_label not in detailed_writers
+        ):
+            writer = _IncrementalJSONWriter(detailed_dir / f"{method_label}_detailed_explanations.json")
+            detailed_writers[method_label] = writer
 
     # Collect per-instance metrics and assemble the final output structure.
     instances: List[Dict[str, Any]] = []
@@ -423,7 +431,8 @@ def run_experiment(
 
             explainer_records.append(explanation_entry)
 
-            if write_detailed_explanations and detailed_dir is not None:
+            writer = detailed_writers.get(method_label)
+            if writer is not None:
                 predicted_label = inst_record["predicted_label"]
                 predicted_proba = inst_record.get("predicted_proba")
                 true_label = inst_record.get("true_label")
@@ -444,7 +453,7 @@ def run_experiment(
                 }
                 if gen_time is not None:
                     record["generation_time"] = float(gen_time)
-                detailed_records.setdefault(method_label, []).append(record)
+                writer.write(record)
 
             if write_metric_results:
                 metric_entry = {
@@ -468,10 +477,8 @@ def run_experiment(
         batch_metrics_result[method_label] = data["batch_metrics"]
 
     if write_detailed_explanations and detailed_dir is not None:
-        for method_label, records in detailed_records.items():
-            file_path = detailed_dir / f"{method_label}_detailed_explanations.json"
-            with file_path.open("w", encoding="utf-8") as handle:
-                json.dump(to_serializable(records), handle, indent=2)
+        for method_label, writer in detailed_writers.items():
+            file_path = writer.finalize()
             detailed_paths[method_label] = str(file_path)
 
     if write_metric_results and metrics_dir is not None:
@@ -836,6 +843,36 @@ def _write_metric_results(
     with file_path.open("w", encoding="utf-8") as handle:
         json.dump(to_serializable(payload), handle, indent=2)
     return str(file_path)
+
+
+class _IncrementalJSONWriter:
+    """Utility to stream explanation records to disk without holding full list."""
+
+    def __init__(self, path: Path):
+        self._path = path
+        self._handle = path.open("w", encoding="utf-8")
+        self._first = True
+        self._handle.write("[\n")
+
+    def write(self, record: Dict[str, Any]) -> None:
+        if self._handle is None:
+            raise RuntimeError("Writer has already been finalized.")
+        if not self._first:
+            self._handle.write(",\n")
+        else:
+            self._first = False
+        json.dump(to_serializable(record), self._handle)
+
+    def finalize(self) -> Path:
+        if self._handle is None:
+            return self._path
+        if self._first:
+            self._handle.write("]\n")
+        else:
+            self._handle.write("\n]\n")
+        self._handle.close()
+        self._handle = None
+        return self._path
 
 
 def _coerce_metric_dict(values: Optional[Dict[str, Any]]) -> Dict[str, float]:

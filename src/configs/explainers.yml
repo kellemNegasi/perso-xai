@@ -11,6 +11,7 @@ shap:
     experiment:
       logging:
         level: WARNING
+        library_level: WARNING
       explanation:
         max_instances: 30
         method_max_instances: 50

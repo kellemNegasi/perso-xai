@@ -35,6 +35,12 @@ class SHAPExplainer(BaseExplainer):
         try:
             import shap  # type: ignore
             self._shap = shap
+            shap_logger = logging.getLogger("shap")
+            lib_level = self._log_cfg.get("library_level") or self._expl_cfg.get("shap_library_log_level")
+            if lib_level:
+                numeric_level = getattr(logging, str(lib_level).upper(), None)
+                if isinstance(numeric_level, int):
+                    shap_logger.setLevel(numeric_level)
         except Exception:
             self._shap = None
             self.logger.warning("`shap` not available; will use permutation fallback.")

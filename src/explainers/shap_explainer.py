@@ -161,8 +161,27 @@ class SHAPExplainer(BaseExplainer):
     def _kernel_predict_fn(self):
         """Prediction function for KernelSHAP (classification-friendly)."""
         if hasattr(self.model, "predict_proba"):
+            target_idx = self._select_target_class_index()
+            if target_idx is not None:
+                return lambda x, idx=target_idx: self.model.predict_proba(x)[:, idx]
             return lambda x: self.model.predict_proba(x)  # returns (n, C)
         return lambda x: self.model.predict_numeric(x)  # shape (n,) or (n, 1)
+
+    def _select_target_class_index(self) -> Optional[int]:
+        """Return the class index SHAP should explain for classification models."""
+        classes = getattr(self.model, "classes_", None)
+        if classes is None:
+            return None
+        try:
+            labels = list(classes)
+        except TypeError:
+            return None
+        if len(labels) == 2:
+            return 1
+        target_label = self._expl_cfg.get("shap_target_class")
+        if target_label is not None and target_label in labels:
+            return labels.index(target_label)
+        return None
 
     def _select_shap_values(self, shap_values_raw, prediction: np.ndarray) -> np.ndarray:
         """

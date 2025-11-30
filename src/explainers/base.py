@@ -73,6 +73,11 @@ class BaseExplainer(ABC):
         self._exp_cfg = self.config.get("experiment", {}) or {}
         self._expl_cfg = self._exp_cfg.get("explanation", {}) or {}
         self._log_cfg = self._exp_cfg.get("logging", {}) or {}
+        log_level = self._log_cfg.get("level")
+        if log_level:
+            numeric_level = getattr(logging, str(log_level).upper(), None)
+            if isinstance(numeric_level, int):
+                self.logger.setLevel(numeric_level)
         self._log_progress = bool(
             self.config.get("log_progress")
             or self._exp_cfg.get("log_progress")
@@ -85,6 +90,7 @@ class BaseExplainer(ABC):
             "strategy": self._expl_cfg.get("sampling_strategy", "sequential"),
             "max_instances": self._expl_cfg.get("max_instances")
             or self._expl_cfg.get("max_test_samples"),
+            "method_cap": self._expl_cfg.get("method_max_instances"),
             "original_size": None,
             "selected_size": None,
             "problem_type": None,
@@ -226,6 +232,23 @@ class BaseExplainer(ABC):
         if max_n is None:
             # backward-compat with older config name
             max_n = self._expl_cfg.get("max_test_samples")
+
+        method_cap = self._expl_cfg.get("method_max_instances")
+        if method_cap is not None:
+            try:
+                cap_value = int(method_cap)
+            except (TypeError, ValueError):
+                raise ValueError(
+                    f"experiment.explanation.method_max_instances must be an integer. Got {method_cap!r}"
+                ) from None
+            if cap_value <= 0:
+                raise ValueError(
+                    f"experiment.explanation.method_max_instances must be > 0. Got {cap_value}"
+                )
+            if max_n is None:
+                max_n = cap_value
+            else:
+                max_n = min(int(max_n), cap_value)
 
         original_len = len(X)
         self._sampling_info.setdefault("strategy", "sequential")

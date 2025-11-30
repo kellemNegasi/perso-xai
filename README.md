@@ -27,16 +27,18 @@ The runner pulls the dataset/model/explainer/metric configs from `src/configs/*.
 
 ## Current Explainers
 
-Every explainer now limits itself to a small, randomly sampled subset of the evaluation set (`experiment.explanation.max_instances`, default `1`). The underlying dataset is sampled without replacement using the explainer’s configured `sampling_strategy` (default `random`) so every run still draws from the full test distribution while keeping runtimes manageable. Adjust those knobs in `src/configs/explainers.yml` if you need more than one instance or want deterministic (sequential) selection.
+Every explainer now limits itself to a small, randomly sampled subset of the evaluation set (`experiment.explanation.max_instances`, default `50`) and you can tighten/loosen it further per method via `method_max_instances`. The underlying dataset is sampled without replacement using the explainer’s configured `sampling_strategy` (default `random`) so every run still draws from the full test distribution while keeping runtimes manageable. Adjust those knobs in `src/configs/explainers.yml` if you need a different count or deterministic (sequential) selection.
 
 ### Structured Outputs
 Use `--write-detailed-explanations` to persist per-instance explanation payloads under `saved_models/detailed_explanations/<dataset>/<model>/<method>_detailed_explanations.json`. Re-run metrics without recomputing explainers by passing `--reuse-detailed-explanations`; the orchestrator will load any cached files before invoking the explainer. To emit per-method metric artifacts, add `--write-metric-results` (optionally override `--metrics-output-dir`): each metric run writes `saved_models/metrics_results/<dataset>/<model>/<method>_metrics.json` containing the instance-level scores, batch metrics, and evaluator metadata.
+
+Set `experiment.logging.level` within an explainer’s config entry to throttle noisy INFO logs (e.g., SHAP now defaults to `WARNING`). Combine with `experiment.logging.progress` if you still want periodic progress updates without the full verbose output.
 
 ### SHAP (`shap`)
 Hybrid Tree/Kernel SHAP implementation [(`src/explainers/shap_explainer.py`)](src/explainers/shap_explainer.py). Tree models use `shap.TreeExplainer`; other models fall back to Kernel SHAP with a randomly sampled background set. Parameter: `background_sample_size` (default 100) controls how many training points form the background distribution for Kernel SHAP; larger values reduce variance but increase runtime.
 
 ### LIME (`lime`)
-Local linear surrogate around each instance [(`src/explainers/lime_explainer.py`)](src/explainers/lime_explainer.py). Parameters: `lime_num_samples` (number of noisy perturbations drawn per instance), `lime_noise_scale` (standard deviation multiplier for Gaussian perturbations relative to feature std), and `lime_kernel_width` (RBF width that weights perturbations by similarity). Higher sample counts and smaller noise yield smoother but more expensive explanations.
+Local linear surrogate around each instance [(`src/explainers/lime_explainer.py`)](src/explainers/lime_explainer.py). Parameters: `lime_num_samples` (number of noisy perturbations drawn per instance, default 100), `lime_noise_scale` (standard deviation multiplier for Gaussian perturbations relative to feature std), and `lime_kernel_width` (RBF width that weights perturbations by similarity). Higher sample counts and smaller noise yield smoother but more expensive explanations. A persistent RNG ensures each instance sees unique perturbations even when `random_state` is set.
 
 ### Integrated Gradients (`integrated_gradients`)
 Finite-difference approximation of Integrated Gradients for tabular models [(src/explainers/integrated_gradients_explainer.py)](src/explainers/integrated_gradients_explainer.py). Parameters: `ig_steps` (number of interpolation points between baseline and instance) sets the Riemann approximation resolution, and `ig_epsilon` (finite-difference step) controls gradient accuracy. Baseline defaults to the training mean when available, otherwise zeros.

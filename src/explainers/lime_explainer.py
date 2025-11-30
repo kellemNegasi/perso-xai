@@ -31,6 +31,7 @@ class LIMEExplainer(BaseExplainer):
         self._y_train: Optional[np.ndarray] = None
         self._train_mean: Optional[np.ndarray] = None
         self._train_std: Optional[np.ndarray] = None
+        self._rng = np.random.default_rng(self.random_state)
 
         ds_X = getattr(self.dataset, "X_train", None)
         ds_y = getattr(self.dataset, "y_train", None)
@@ -165,7 +166,7 @@ class LIMEExplainer(BaseExplainer):
     ) -> Tuple[np.ndarray, Dict[str, Any]]:
         """Perturb the instance, fit weighted linear model, return coefficients."""
         n_features = instance.shape[0]
-        n_samples = int(self._expl_cfg.get("lime_num_samples", 500))
+        n_samples = int(self._expl_cfg.get("lime_num_samples", 100))
         kernel_width = float(
             self._expl_cfg.get("lime_kernel_width", np.sqrt(n_features) * 0.75)
         )
@@ -177,8 +178,7 @@ class LIMEExplainer(BaseExplainer):
             if self._train_std is not None
             else np.ones_like(instance)
         )
-        rng = np.random.default_rng(self.random_state)
-        perturbations = instance + rng.normal(
+        perturbations = instance + self._rng.normal(
             0.0, std * noise_scale, size=(n_samples, n_features)
         )
         perturbations = np.vstack([instance, perturbations])

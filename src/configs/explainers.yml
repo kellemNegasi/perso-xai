@@ -3,7 +3,7 @@ templates:
     supported_data_types:
       - tabular
 
-shap_default:
+shap:
   <<: *tabular_explainer
   type: shap
   description: "Tree/Kernel SHAP with default background size."
@@ -12,7 +12,7 @@ shap_default:
       explanation:
         background_sample_size: 100
 
-lime_default:
+lime:
   <<: *tabular_explainer
   type: lime
   description: "LIME with 500 perturbations."
@@ -23,7 +23,7 @@ lime_default:
         lime_noise_scale: 0.1
         lime_kernel_width: 2.0
 
-integrated_gradients_default:
+integrated_gradients:
   <<: *tabular_explainer
   type: integrated_gradients
   description: "Finite-difference IG."
@@ -33,7 +33,7 @@ integrated_gradients_default:
         ig_steps: 30 # Sundararajan et al suggest that that somewhere between 20 and 300 steps are enough to approximate the integral (within 5%),.
         ig_epsilon: 0.001
 
-causal_shap_default:
+causal_shap:
   <<: *tabular_explainer
   type: causal_shap
   description: "Causal SHAP with correlation threshold."

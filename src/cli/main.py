@@ -84,6 +84,16 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Directory for serialized trained models (defaults to saved_models).",
     )
+    parser.add_argument(
+        "--stop-after-training",
+        action="store_true",
+        help="Stop after hyperparameter tuning/model training (skip explanations + metrics).",
+    )
+    parser.add_argument(
+        "--stop-after-explanations",
+        action="store_true",
+        help="Run explainers but skip all metric evaluations.",
+    )
     return parser
 
 
@@ -116,6 +126,8 @@ def _run_with_model_override(
     reuse_trained_models: bool,
     tuning_output_dir: Path | None,
     model_store_dir: Path | None,
+    stop_after_training: bool,
+    stop_after_explanations: bool,
 ) -> List[dict]:
     results: List[dict] = []
     for name in experiments:
@@ -134,6 +146,8 @@ def _run_with_model_override(
                 reuse_trained_models=reuse_trained_models,
                 tuning_output_dir=tuning_output_dir,
                 model_store_dir=model_store_dir,
+                stop_after_training=stop_after_training,
+                stop_after_explanations=stop_after_explanations,
             )
         )
     return results
@@ -159,6 +173,8 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     if args.model and len(args.experiments) > 1:
         parser.error("--model can only be used when running a single experiment at a time")
+    if args.stop_after_training and args.stop_after_explanations:
+        parser.error("--stop-after-training and --stop-after-explanations are mutually exclusive")
     # TODO log the list command line arguments 
     
     _configure_logging(args.log_level)
@@ -167,13 +183,15 @@ def main(argv: Sequence[str] | None = None) -> int:
     logger.debug("CLI arguments: %s", cli_args)
     output_dir = _ensure_output_dir(args.output_dir)
     logger.info(
-        "Requested experiments=%s max_instances=%s model_override=%s tune=%s use_tuned=%s reuse_models=%s",
+        "Requested experiments=%s max_instances=%s model_override=%s tune=%s use_tuned=%s reuse_models=%s stop_after_training=%s stop_after_explanations=%s",
         args.experiments,
         args.max_instances,
         args.model,
         args.tune_models,
         args.use_tuned_params,
         args.reuse_trained_models,
+        args.stop_after_training,
+        args.stop_after_explanations,
     )
 
     if args.model:
@@ -187,6 +205,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             reuse_trained_models=args.reuse_trained_models,
             tuning_output_dir=args.tuning_output_dir,
             model_store_dir=args.model_store_dir,
+            stop_after_training=args.stop_after_training,
+            stop_after_explanations=args.stop_after_explanations,
         )
     else:
         results = run_experiments(
@@ -198,6 +218,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             reuse_trained_models=args.reuse_trained_models,
             tuning_output_dir=args.tuning_output_dir,
             model_store_dir=args.model_store_dir,
+            stop_after_training=args.stop_after_training,
+            stop_after_explanations=args.stop_after_explanations,
         )
 
     logger.info(

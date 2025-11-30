@@ -87,7 +87,9 @@ class BaseExplainer(ABC):
             or self._expl_cfg.get("max_test_samples"),
             "original_size": None,
             "selected_size": None,
+            "problem_type": None,
         }
+        self._sample_indices: Optional[np.ndarray] = None
 
     # -----------------------------
     # Public API (high-level)
@@ -218,6 +220,7 @@ class BaseExplainer(ABC):
     ) -> Tuple[np.ndarray, Optional[np.ndarray]]:
         """
         Limit samples based on `experiment.explanation.max_instances` (or `max_test_samples` for backward compat).
+        Applies strategy-aware sampling to maintain class/target coverage.
         """
         max_n = self._expl_cfg.get("max_instances")
         if max_n is None:
@@ -225,21 +228,47 @@ class BaseExplainer(ABC):
             max_n = self._expl_cfg.get("max_test_samples")
 
         original_len = len(X)
-
-        if max_n is not None and len(X) > int(max_n):
-            self.logger.info(
-                "Limiting dataset from %d to %d instances for explanation generation",
-                len(X), int(max_n),
-            )
-            X = X[: int(max_n)]
-            if y is not None:
-                y = y[: int(max_n)]
-            self._sampling_info["selected_size"] = int(max_n)
-        else:
-            self._sampling_info["selected_size"] = original_len
-
-        self._sampling_info["max_instances"] = int(max_n) if max_n is not None else None
+        self._sampling_info.setdefault("strategy", "sequential")
         self._sampling_info["original_size"] = original_len
+        self._sampling_info["selected_size"] = original_len
+        self._sampling_info["max_instances"] = int(max_n) if max_n is not None else None
+        base_indices = np.arange(original_len, dtype=int)
+
+        if max_n is None or original_len <= int(max_n):
+            self._sample_indices = base_indices
+            return X, y
+
+        problem_type = self._infer_problem_type(y)
+        self._sampling_info["problem_type"] = problem_type
+
+        strategy_cfg = str(self._expl_cfg.get("sampling_strategy", "sequential")).lower()
+        if strategy_cfg == "auto":
+            if problem_type == "classification":
+                strategy = "balanced"
+            elif problem_type == "regression":
+                strategy = "quantile"
+            else:
+                strategy = "random"
+        else:
+            strategy = strategy_cfg
+        self._sampling_info["strategy"] = strategy
+
+        indices = self._select_sample_indices(
+            n_samples=original_len,
+            y=y,
+            max_n=int(max_n),
+            strategy=strategy,
+            problem_type=problem_type,
+        )
+        if len(indices) != int(max_n):
+            # Fallback to sequential slice if strategy produced unexpected count.
+            indices = np.arange(int(max_n))
+
+        X = X[indices]
+        if y is not None:
+            y = y[indices]
+        self._sampling_info["selected_size"] = len(X)
+        self._sample_indices = indices
         return X, y
 
     def _coerce_X_y(
@@ -399,6 +428,146 @@ class BaseExplainer(ABC):
         # 2D edge-case (shouldn't happen for a single instance)
         return [f"feature_{i}" for i in range(instance_array.shape[-1])]
 
+    def _infer_problem_type(self, y: Optional[np.ndarray]) -> str:
+        """Best-effort detection of classification vs regression."""
+        cfg_override = self._expl_cfg.get("problem_type")
+        if isinstance(cfg_override, str):
+            override = cfg_override.lower()
+            if override in {"classification", "regression"}:
+                return override
+
+        dataset_task = getattr(self.dataset, "task", None) or getattr(
+            self.dataset, "task_type", None
+        )
+        if isinstance(dataset_task, str):
+            lowered = dataset_task.lower()
+            if lowered in {"classification", "regression"}:
+                return lowered
+
+        estimator_type = getattr(self.model, "_estimator_type", None)
+        if estimator_type in {"classifier", "regressor"}:
+            return "classification" if estimator_type == "classifier" else "regression"
+
+        if y is None:
+            return "unknown"
+
+        y_arr = np.asarray(y)
+        if y_arr.dtype.kind in {"U", "S", "O"}:
+            return "classification"
+        unique_vals = np.unique(y_arr)
+        # Heuristic: if many repeated discrete values, treat as classification.
+        if y_arr.dtype.kind in {"b", "i", "u"}:
+            if len(unique_vals) <= max(15, int(0.1 * len(y_arr))):
+                return "classification"
+        return "regression"
+
+    def _select_sample_indices(
+        self,
+        *,
+        n_samples: int,
+        y: Optional[np.ndarray],
+        max_n: int,
+        strategy: str,
+        problem_type: str,
+    ) -> np.ndarray:
+        """Return indices according to the requested sampling strategy."""
+        if max_n >= n_samples:
+            return np.arange(n_samples, dtype=int)
+
+        stratified_aliases = {"balanced", "stratified", "class_balanced"}
+        quantile_aliases = {"quantile", "diverse", "range"}
+
+        if strategy in stratified_aliases and y is not None and problem_type == "classification":
+            return self._balanced_class_indices(y, max_n)
+
+        if strategy in quantile_aliases and y is not None and problem_type == "regression":
+            return self._quantile_sample_indices(y, max_n)
+
+        if strategy in {"random", "shuffle"}:
+            rng = np.random.default_rng(self.random_state)
+            return rng.choice(n_samples, size=max_n, replace=False)
+
+        if strategy in {"sequential", "first"}:
+            return np.arange(max_n, dtype=int)
+
+        # Fallbacks
+        if problem_type == "classification" and y is not None:
+            return self._balanced_class_indices(y, max_n)
+        if problem_type == "regression" and y is not None:
+            return self._quantile_sample_indices(y, max_n)
+        return np.arange(max_n, dtype=int)
+
+    def _balanced_class_indices(self, y: np.ndarray, max_n: int) -> np.ndarray:
+        """Select up to ``max_n`` indices with roughly balanced class coverage."""
+        y_arr = np.asarray(y)
+        classes, inverse = np.unique(y_arr, return_inverse=True)
+        if len(classes) == 0:
+            return np.arange(max_n, dtype=int)
+
+        rng = np.random.default_rng(self.random_state)
+        per_class = max(1, max_n // len(classes))
+        selected: List[int] = []
+        leftovers: List[int] = []
+
+        for class_idx, cls in enumerate(classes):
+            class_member_indices = np.where(inverse == class_idx)[0]
+            if len(class_member_indices) == 0:
+                continue
+            perm = rng.permutation(class_member_indices)
+            take = min(per_class, len(perm))
+            selected.extend(perm[:take].tolist())
+            if take < len(perm):
+                leftovers.extend(perm[take:].tolist())
+
+        if len(selected) < max_n and leftovers:
+            rng.shuffle(leftovers)
+            needed = max_n - len(selected)
+            selected.extend(leftovers[:needed])
+
+        if len(selected) < max_n:
+            remaining = np.setdiff1d(
+                np.arange(len(y_arr), dtype=int),
+                np.asarray(selected, dtype=int),
+                assume_unique=False,
+            )
+            if len(remaining) > 0:
+                remaining = np.asarray(remaining)
+                rng.shuffle(remaining)
+                needed = max_n - len(selected)
+                selected.extend(remaining[:needed].tolist())
+
+        if not selected:
+            return np.arange(max_n, dtype=int)
+
+        selected_array = np.asarray(selected, dtype=int)
+        if len(selected_array) > max_n:
+            selected_array = selected_array[:max_n]
+        return selected_array
+
+    def _quantile_sample_indices(self, y: np.ndarray, max_n: int) -> np.ndarray:
+        """Select indices spread across the target distribution."""
+        y_arr = np.asarray(y, dtype=float).ravel()
+        if len(y_arr) == 0:
+            return np.arange(max_n, dtype=int)
+        valid_mask = ~np.isnan(y_arr)
+        if not np.any(valid_mask):
+            return np.arange(max_n, dtype=int)
+        valid_indices = np.where(valid_mask)[0]
+        sorted_order = valid_indices[np.argsort(y_arr[valid_mask], kind="mergesort")]
+        if max_n >= len(sorted_order):
+            return sorted_order
+        positions = np.floor(
+            np.linspace(0, len(sorted_order), num=max_n, endpoint=False)
+        ).astype(int)
+        selected = sorted_order[positions]
+        if len(selected) < max_n:
+            rng = np.random.default_rng(self.random_state)
+            remaining = np.setdiff1d(sorted_order, selected, assume_unique=True)
+            if len(remaining) > 0:
+                rng.shuffle(remaining)
+                selected = np.concatenate([selected, remaining[: max_n - len(selected)]])
+        return selected.astype(int)
+
     def _augment_metadata(
         self,
         explanations: List[Dict[str, Any]],
@@ -410,9 +579,15 @@ class BaseExplainer(ABC):
         explain_dataset regardless of how explain_batch is implemented.
         """
         sampling_meta = dict(self._sampling_info) if self._sampling_info else {}
+        dataset_indices: Optional[np.ndarray] = None
+        if self._sample_indices is not None:
+            dataset_indices = np.asarray(self._sample_indices, dtype=int)
+        else:
+            dataset_indices = np.arange(len(explanations), dtype=int)
         for idx, record in enumerate(explanations):
             metadata = record.setdefault("metadata", {})
             metadata.setdefault("instance_index", idx)
+            metadata.setdefault("dataset_index", int(dataset_indices[idx]))
             if y is not None and idx < len(y):
                 metadata.setdefault("true_label", _safe_scalar(y[idx]))
             if sampling_meta and "sampling" not in metadata:

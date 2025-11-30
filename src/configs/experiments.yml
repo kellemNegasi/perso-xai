@@ -1,9 +1,9 @@
 openml_benchmark_defaults: &openml_benchmark_defaults
   explainers:
-    - key: shap_default
-    - key: lime_default
-    - key: integrated_gradients_default
-    - key: causal_shap_default
+    - key: shap
+    - key: lime
+    - key: integrated_gradients
+    - key: causal_shap
   metrics:
     - correctness
     - monotonicity_correlation
@@ -24,8 +24,8 @@ tabular_demo_suite:
   model:
     key: random_forest
   explainers:
-    - key: shap_default
-    - key: lime_default
+    - key: shap
+    - key: lime
   metrics:
     - correctness
     - monotonicity_correlation
@@ -42,8 +42,8 @@ breast_cancer_rf_suite:
   model:
     key: random_forest
   explainers:
-    - key: shap_default
-    - key: causal_shap_default
+    - key: shap
+    - key: causal_shap
   metrics:
     - correctness
     - monotonicity_correlation
@@ -60,10 +60,10 @@ breast_cancer_lr_suite:
   model:
     key: logistic_regression
   explainers:
-    - key: shap_default
-    - key: causal_shap_default
-    - key: lime_default
-    - key: integrated_gradients_default
+    - key: shap
+    - key: causal_shap
+    - key: lime
+    - key: integrated_gradients
   logging:
     progress: true
   metrics:

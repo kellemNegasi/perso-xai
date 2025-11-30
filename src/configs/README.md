@@ -77,7 +77,7 @@ tabular_demo_suite:
   dataset: {key: tabular_toy}
   model: {key: random_forest}
   explainers:
-    - {key: shap_default}
+    - {key: shap}
     - {key: lime_default}
 ```
 

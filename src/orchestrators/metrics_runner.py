@@ -25,7 +25,6 @@ from .utils import (
     instantiate_explainer,
     instantiate_metric,
     instantiate_model,
-    make_serializable_explanation,
     metric_capabilities,
     to_serializable,
 )
@@ -46,6 +45,8 @@ def run_experiment(
     reuse_trained_models: bool = False,
     tuning_output_dir: Optional[str | Path] = None,
     model_store_dir: Optional[str | Path] = None,
+    stop_after_training: bool = False,
+    stop_after_explanations: bool = False,
 ) -> Dict[str, Any]:
     """
     Execute a configured experiment (dataset/model/explainers/metrics).
@@ -68,12 +69,21 @@ def run_experiment(
         Custom directory for hyperparameter tuning artifacts.
     model_store_dir : str | Path | None, optional
         Directory for persisted trained models.
+    stop_after_training : bool, optional
+        Halt the pipeline after tuning/training (no explanations or metrics).
+    stop_after_explanations : bool, optional
+        Generate explanations but skip metric computation/evaluation.
 
     Returns
     -------
     Dict[str, Any]
         Nested experiment result ready for JSON serialization.
     """
+    if stop_after_training and stop_after_explanations:
+        raise ValueError(
+            "stop_after_training and stop_after_explanations cannot both be True."
+        )
+
     LOGGER.info("=== Running experiment '%s' ===", experiment_name)
     exp_cfg = EXPERIMENT_CFG[experiment_name]
     logging_cfg = exp_cfg.get("logging", {}) or {}
@@ -121,6 +131,43 @@ def run_experiment(
         dataset=dataset,
         experiment_name=experiment_name,
     )
+    feature_names = list(getattr(dataset, "feature_names", []) or [])
+
+    def _finalize(
+        *,
+        instances_data: List[Dict[str, Any]],
+        batch_metrics_data: Dict[str, Dict[str, float]],
+        metadata_data: Dict[str, Dict[int, Any]],
+        stage_completed: str,
+    ) -> Dict[str, Any]:
+        metadata_serialized = {
+            method: meta for method, meta in metadata_data.items() if meta
+        }
+        result_payload = {
+            "experiment": experiment_name,
+            "dataset": dataset_name,
+            "model": model_name,
+            "instances": instances_data,
+            "feature_names": feature_names,
+            "batch_metrics": batch_metrics_data,
+            "explanation_metadata": metadata_serialized,
+            "stage_completed": stage_completed,
+        }
+        if output_path is not None:
+            path = Path(output_path)
+            path.write_text(
+                json.dumps(to_serializable(result_payload), indent=2),
+                encoding="utf-8",
+            )
+            LOGGER.info("Wrote experiment result to %s", path)
+        LOGGER.info(
+            "Completed experiment '%s' (stage=%s, %d instances, %d explainers)",
+            experiment_name,
+            stage_completed,
+            len(instances_data),
+            len(explainer_names),
+        )
+        return result_payload
     LOGGER.info("Instantiating model '%s'", model_name)
     tuner: Optional[HyperparameterTuner] = None
     if tune_models or use_tuned_params:
@@ -147,6 +194,7 @@ def run_experiment(
                     model_name=model_name,
                     X=dataset.X_train,
                     y=dataset.y_train,
+                    dataset_type=dataset_type,
                 )
             elif use_tuned_params:
                 params_override = tuner.load_best_parameters(dataset_name, model_name)
@@ -157,6 +205,18 @@ def run_experiment(
         model.fit(dataset.X_train, dataset.y_train)
         if persistence:
             persistence.save(dataset_name, model_name, model)
+
+    if stop_after_training:
+        LOGGER.info(
+            "Stopping experiment '%s' after training stage (per CLI flag).",
+            experiment_name,
+        )
+        return _finalize(
+            instances_data=[],
+            batch_metrics_data={},
+            metadata_data={},
+            stage_completed="training",
+        )
 
     X_eval = dataset.X_test
     y_eval = dataset.y_test
@@ -169,8 +229,18 @@ def run_experiment(
     supports_proba = getattr(model, "supports_proba", hasattr(model, "predict_proba"))
     y_proba = model.predict_proba(X_eval) if supports_proba else None
 
-    metric_objs = {name: instantiate_metric(name) for name in metric_names}
-    metric_caps = {name: metric_capabilities(metric) for name, metric in metric_objs.items()}
+    metric_objs: Dict[str, Any] = {}
+    metric_caps: Dict[str, Dict[str, Any]] = {}
+    if stop_after_explanations and metric_names:
+        LOGGER.info(
+            "Skipping metric evaluation for experiment '%s' (stop-after-explanations flag).",
+            experiment_name,
+        )
+    else:
+        metric_objs = {name: instantiate_metric(name) for name in metric_names}
+        metric_caps = {
+            name: metric_capabilities(metric) for name, metric in metric_objs.items()
+        }
 
     # Compute the explanations and batch-level metrics first.
     explainer_outputs: Dict[str, Dict[str, Any]] = {}
@@ -182,19 +252,20 @@ def run_experiment(
         expl_results = explainer.explain_dataset(X_eval, y_eval)
 
         batch_metrics: Dict[str, float] = {}
-        for metric_name, metric in metric_objs.items():
-            caps = metric_caps[metric_name]
-            if caps["per_instance"] or not caps["requires_full_batch"]:
-                continue
-            if log_progress:
-                LOGGER.info("Running %s metric (batch) for %s", metric_name, expl_name)
-            out = metric.evaluate(
-                model=model,
-                explanation_results=expl_results,
-                dataset=dataset,
-                explainer=explainer,
-            )
-            batch_metrics.update(_coerce_metric_dict(out))
+        if metric_objs:
+            for metric_name, metric in metric_objs.items():
+                caps = metric_caps[metric_name]
+                if caps["per_instance"] or not caps["requires_full_batch"]:
+                    continue
+                if log_progress:
+                    LOGGER.info("Running %s metric (batch) for %s", metric_name, expl_name)
+                out = metric.evaluate(
+                    model=model,
+                    explanation_results=expl_results,
+                    dataset=dataset,
+                    explainer=explainer,
+                )
+                batch_metrics.update(_coerce_metric_dict(out))
 
         explainer_outputs[expl_name] = {
             "explainer": explainer,
@@ -204,6 +275,7 @@ def run_experiment(
 
     # Collect per-instance metrics and assemble the final output structure.
     instances: List[Dict[str, Any]] = []
+    explanation_metadata: Dict[str, Dict[int, Any]] = {}
     n_instances = len(X_eval)
     announced_metrics: Set[Tuple[str, str]] = set()
     for idx in range(n_instances):
@@ -212,75 +284,86 @@ def run_experiment(
             "true_label": _safe_scalar(y_eval[idx]) if y_eval is not None else None,
             "predicted_label": _safe_scalar(y_pred[idx]),
         }
+        inst_record["dataset_index"] = int(idx)
         if y_proba is not None:
             inst_record["predicted_proba"] = np.asarray(y_proba[idx]).tolist()
 
         explainer_records: List[Dict[str, Any]] = []
         for expl_name, data in explainer_outputs.items():
             expl_results = data["results"]
+            method_label = expl_results.get("method", expl_name)
             explainer_obj = data["explainer"]
             explanation_i = expl_results["explanations"][idx]
 
             metrics_for_explainer: Dict[str, float] = {}
-            for metric_name, metric in metric_objs.items():
-                caps = metric_caps[metric_name]
-                if not caps["per_instance"]:
-                    continue
-                key = (metric_name, expl_name)
-                if key not in announced_metrics:
-                    LOGGER.info(
-                        "Running %s metric (per-instance) for %s",
-                        metric_name,
-                        expl_name,
+            if metric_objs:
+                for metric_name, metric in metric_objs.items():
+                    caps = metric_caps[metric_name]
+                    if not caps["per_instance"]:
+                        continue
+                    key = (metric_name, method_label)
+                    if key not in announced_metrics:
+                        LOGGER.info(
+                            "Running %s metric (per-instance) for %s",
+                            metric_name,
+                            method_label,
+                        )
+                        announced_metrics.add(key)
+                    payload = dict(expl_results)
+                    payload["current_index"] = idx
+                    out = metric.evaluate(
+                        model=model,
+                        explanation_results=payload,
+                        dataset=dataset,
+                        explainer=explainer_obj,
                     )
-                    announced_metrics.add(key)
-                payload = dict(expl_results)
-                payload["current_index"] = idx
-                out = metric.evaluate(
-                    model=model,
-                    explanation_results=payload,
-                    dataset=dataset,
-                    explainer=explainer_obj,
-                )
-                metrics_for_explainer.update(_coerce_metric_dict(out))
+                    metrics_for_explainer.update(_coerce_metric_dict(out))
 
-            # Include batch-level metrics so consumers find them alongside per-instance ones.
-            for key, value in data["batch_metrics"].items():
-                metrics_for_explainer.setdefault(key, value)
+                for key, value in data["batch_metrics"].items():
+                    metrics_for_explainer.setdefault(key, value)
 
-            explainer_records.append(
-                {
-                    "explainer": expl_name,
-                    "metrics": metrics_for_explainer,
-                    "explanation": make_serializable_explanation(explanation_i),
-                }
-            )
+            metadata = dict(explanation_i.get("metadata") or {})
+            recorded_dataset_idx = metadata.pop("dataset_index", None)
+            dataset_idx = recorded_dataset_idx if recorded_dataset_idx is not None else idx
+            dataset_idx_int = int(dataset_idx)
+            current_dataset_idx = inst_record.get("dataset_index")
+            if current_dataset_idx is None or (
+                recorded_dataset_idx is not None and current_dataset_idx == idx
+            ):
+                inst_record["dataset_index"] = dataset_idx_int
+
+            if metadata:
+                metadata_bucket = explanation_metadata.setdefault(method_label, {})
+                metadata_bucket[dataset_idx_int] = to_serializable(metadata)
+
+            attribution_values = np.asarray(explanation_i.get("attributions", [])).tolist()
+            explanation_entry: Dict[str, Any] = {
+                "method": method_label,
+                "metrics": metrics_for_explainer,
+                "attributions": attribution_values,
+                "metadata_key": dataset_idx_int,
+            }
+            gen_time = explanation_i.get("generation_time")
+            if gen_time is not None:
+                explanation_entry["generation_time"] = float(gen_time)
+
+            explainer_records.append(explanation_entry)
 
         inst_record["explanations"] = explainer_records
         instances.append(inst_record)
 
-    result = {
-        "experiment": experiment_name,
-        "dataset": dataset_name,
-        "model": model_name,
-        "instances": instances,
-        "batch_metrics": {
-            expl_name: data["batch_metrics"] for expl_name, data in explainer_outputs.items()
-        },
-    }
+    batch_metrics_result: Dict[str, Dict[str, float]] = {}
+    for expl_name, data in explainer_outputs.items():
+        method_label = data["results"].get("method", expl_name)
+        batch_metrics_result[method_label] = data["batch_metrics"]
 
-    if output_path is not None:
-        path = Path(output_path)
-        path.write_text(json.dumps(to_serializable(result), indent=2), encoding="utf-8")
-        LOGGER.info("Wrote experiment result to %s", path)
-
-    LOGGER.info(
-        "Completed experiment '%s' (%d instances, %d explainers)",
-        experiment_name,
-        len(instances),
-        len(explainer_names),
+    stage_label = "explanations" if stop_after_explanations else "metrics"
+    return _finalize(
+        instances_data=instances,
+        batch_metrics_data=batch_metrics_result,
+        metadata_data=explanation_metadata,
+        stage_completed=stage_label,
     )
-    return result
 
 
 def run_experiments(
@@ -293,6 +376,8 @@ def run_experiments(
     reuse_trained_models: bool = False,
     tuning_output_dir: Optional[str | Path] = None,
     model_store_dir: Optional[str | Path] = None,
+    stop_after_training: bool = False,
+    stop_after_explanations: bool = False,
 ) -> List[Dict[str, Any]]:
     """
     Run multiple experiments sequentially.
@@ -315,6 +400,10 @@ def run_experiments(
         Directory where tuning artifacts will be persisted.
     model_store_dir : str | Path | None, optional
         Directory for serialized model checkpoints.
+    stop_after_training : bool, optional
+        Halt each experiment after training completes.
+    stop_after_explanations : bool, optional
+        Run explainers but skip metrics for each experiment.
 
     Returns
     -------
@@ -351,6 +440,8 @@ def run_experiments(
                 reuse_trained_models=reuse_trained_models,
                 tuning_output_dir=tuning_output_dir,
                 model_store_dir=model_store_dir,
+                stop_after_training=stop_after_training,
+                stop_after_explanations=stop_after_explanations,
             )
             results.append(experiment_result)
     return results

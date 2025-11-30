@@ -27,16 +27,16 @@ The runner pulls the dataset/model/explainer/metric configs from `src/configs/*.
 
 ## Current Explainers
 
-### SHAP (`shap_default`)
+### SHAP (`shap`)
 Hybrid Tree/Kernel SHAP implementation [(`src/explainers/shap_explainer.py`)](src/explainers/shap_explainer.py). Tree models use `shap.TreeExplainer`; other models fall back to Kernel SHAP with a randomly sampled background set. Parameter: `background_sample_size` (default 100) controls how many training points form the background distribution for Kernel SHAP; larger values reduce variance but increase runtime.
 
-### LIME (`lime_default`)
+### LIME (`lime`)
 Local linear surrogate around each instance [(`src/explainers/lime_explainer.py`)](src/explainers/lime_explainer.py). Parameters: `lime_num_samples` (number of noisy perturbations drawn per instance), `lime_noise_scale` (standard deviation multiplier for Gaussian perturbations relative to feature std), and `lime_kernel_width` (RBF width that weights perturbations by similarity). Higher sample counts and smaller noise yield smoother but more expensive explanations.
 
-### Integrated Gradients (`integrated_gradients_default`)
+### Integrated Gradients (`integrated_gradients`)
 Finite-difference approximation of Integrated Gradients for tabular models [(src/explainers/integrated_gradients_explainer.py)](src/explainers/integrated_gradients_explainer.py). Parameters: `ig_steps` (number of interpolation points between baseline and instance) sets the Riemann approximation resolution, and `ig_epsilon` (finite-difference step) controls gradient accuracy. Baseline defaults to the training mean when available, otherwise zeros.
 
-### Causal SHAP (`causal_shap_default`)
+### Causal SHAP (`causal_shap`)
 Custom correlation-aware SHAP variant that infers a simple causal ordering from feature correlations before sampling coalitions [(`src/explainers/causal_shap_explainer.py`)](src/explainers/causal_shap_explainer.py). Parameters: `causal_shap_corr_threshold` determines when two features are considered linked (higher threshold → sparser graph) and `causal_shap_coalitions` sets the number of Monte Carlo coalitions sampled per feature (more samples reduce variance but cost more model calls).
 
 ## Implemented Metrics

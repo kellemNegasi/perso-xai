@@ -3,7 +3,7 @@ settings:
   scoring: accuracy
   n_jobs: -1
   verbose: 2
-  optimization_method: grid_search
+  optimization_method: optuna
   n_trials: 100
   timeout: 3600
 

@@ -45,6 +45,11 @@ datasets:
 Once the entry exists, experiments only need to reference `dataset: {key: my_custom_dataset}`
 and the registry layer will enforce that only compatible models/explainers are paired with it.
 
+**Tuning subsets:** Large datasets can opt into sampling when running hyperparameter tuning by
+adding a `tuning` block with `sample_fraction` (0–1), `max_samples`, and an optional
+`random_state`. The orchestrator will draw that subset for GridSearch/Optuna while the full
+training split is still used for the final model fit.
+
 ## Model/explainer registries (`models.yml` / `explainers.yml`)
 
 Model and explainer entries still carry their `module`/`class` (or `type`) definitions, but they

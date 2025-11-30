@@ -66,7 +66,7 @@ datasets:
   openml_adult_income:
     <<: *tabular_dataset
     source: openml:data_id=4535
-    description: "Census-Income dataset from OpenML (data_id=4535) ~ 48842 rows."
+    description: "Census-Income dataset from OpenML (data_id=4535) ~ 224463 rows."
     loader:
       module: sklearn.datasets
       factory: fetch_openml
@@ -82,6 +82,9 @@ datasets:
     wrapper:
       module: src.datasets.wrappers
       factory: wrap_openml_adult_income
+    tuning:
+      sample_fraction: 0.3
+      random_state: 42
     validation:
       overrides: {}
       notes: "Leverages OpenML metadata; ensure local cache is warmed."

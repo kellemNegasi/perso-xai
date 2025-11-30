@@ -247,7 +247,8 @@ def run_experiment(
     X_eval = dataset.X_test
     y_eval = dataset.y_test
     if max_instances is not None and max_instances < len(X_eval):
-        X_eval = X_eval[: max_instances]
+        # TODO this should be sampled randomly rather than just truncating
+        X_eval = X_eval[: max_instances] 
         if y_eval is not None:
             y_eval = y_eval[: max_instances]
 
@@ -358,24 +359,51 @@ def run_experiment(
     # Collect per-instance metrics and assemble the final output structure.
     instances: List[Dict[str, Any]] = []
     explanation_metadata: Dict[str, Dict[int, Any]] = {}
-    n_instances = len(X_eval)
     announced_metrics: Set[Tuple[str, str]] = set()
-    for idx in range(n_instances):
+    method_index_map: Dict[str, Dict[int, Tuple[int, Dict[str, Any]]]] = {}
+    all_dataset_indices: Set[int] = set()
+    for expl_name, data in explainer_outputs.items():
+        expl_results = data["results"]
+        method_label = expl_results.get("method", expl_name)
+        mapping: Dict[int, Tuple[int, Dict[str, Any]]] = {}
+        for local_idx, explanation in enumerate(expl_results.get("explanations", [])):
+            metadata = explanation.get("metadata") or {}
+            dataset_idx = metadata.get("dataset_index", local_idx)
+            try:
+                dataset_idx_int = int(dataset_idx)
+            except (TypeError, ValueError):
+                dataset_idx_int = int(local_idx)
+            mapping[dataset_idx_int] = (local_idx, explanation)
+            all_dataset_indices.add(dataset_idx_int)
+        method_index_map[method_label] = mapping
+
+    sorted_dataset_indices = sorted(all_dataset_indices)
+    for position, dataset_idx in enumerate(sorted_dataset_indices):
         inst_record: Dict[str, Any] = {
-            "index": int(idx),
-            "true_label": _safe_scalar(y_eval[idx]) if y_eval is not None else None,
-            "predicted_label": _safe_scalar(y_pred[idx]),
+            "index": int(position),
+            "dataset_index": int(dataset_idx),
         }
-        inst_record["dataset_index"] = int(idx)
-        if y_proba is not None:
-            inst_record["predicted_proba"] = np.asarray(y_proba[idx]).tolist()
+        if 0 <= dataset_idx < len(y_pred):
+            inst_record["predicted_label"] = _safe_scalar(y_pred[dataset_idx])
+        else:
+            inst_record["predicted_label"] = None
+        if y_eval is not None and 0 <= dataset_idx < len(y_eval):
+            inst_record["true_label"] = _safe_scalar(y_eval[dataset_idx])
+        else:
+            inst_record["true_label"] = None
+        if y_proba is not None and 0 <= dataset_idx < len(y_proba):
+            inst_record["predicted_proba"] = np.asarray(y_proba[dataset_idx]).tolist()
 
         explainer_records: List[Dict[str, Any]] = []
         for expl_name, data in explainer_outputs.items():
             expl_results = data["results"]
             method_label = expl_results.get("method", expl_name)
             explainer_obj = data["explainer"]
-            explanation_i = expl_results["explanations"][idx]
+            method_mapping = method_index_map.get(method_label, {})
+            lookup = method_mapping.get(int(dataset_idx))
+            if lookup is None:
+                continue
+            local_idx, explanation_i = lookup
 
             metrics_for_explainer: Dict[str, float] = {}
             if metric_objs:
@@ -392,7 +420,7 @@ def run_experiment(
                         )
                         announced_metrics.add(key)
                     payload = dict(expl_results)
-                    payload["current_index"] = idx
+                    payload["current_index"] = local_idx
                     out = metric.evaluate(
                         model=model,
                         explanation_results=payload,
@@ -406,13 +434,9 @@ def run_experiment(
 
             metadata = dict(explanation_i.get("metadata") or {})
             recorded_dataset_idx = metadata.pop("dataset_index", None)
-            dataset_idx = recorded_dataset_idx if recorded_dataset_idx is not None else idx
-            dataset_idx_int = int(dataset_idx)
-            current_dataset_idx = inst_record.get("dataset_index")
-            if current_dataset_idx is None or (
-                recorded_dataset_idx is not None and current_dataset_idx == idx
-            ):
-                inst_record["dataset_index"] = dataset_idx_int
+            dataset_idx_int = (
+                int(recorded_dataset_idx) if recorded_dataset_idx is not None else int(dataset_idx)
+            )
 
             if metadata:
                 metadata_bucket = explanation_metadata.setdefault(method_label, {})
@@ -433,14 +457,14 @@ def run_experiment(
 
             writer = detailed_writers.get(method_label)
             if writer is not None:
-                predicted_label = inst_record["predicted_label"]
+                predicted_label = inst_record.get("predicted_label")
                 predicted_proba = inst_record.get("predicted_proba")
                 true_label = inst_record.get("true_label")
                 correct_prediction = (
                     true_label is not None and predicted_label == true_label
                 )
                 record = {
-                    "instance_id": idx,
+                    "instance_id": dataset_idx_int,
                     "dataset_index": dataset_idx_int,
                     "true_label": true_label,
                     "prediction": predicted_label,
@@ -468,6 +492,8 @@ def run_experiment(
                 }
                 metric_instance_records.setdefault(method_label, []).append(metric_entry)
 
+        if not explainer_records:
+            continue
         inst_record["explanations"] = explainer_records
         instances.append(inst_record)
 

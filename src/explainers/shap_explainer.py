@@ -5,6 +5,7 @@ Depends on BaseExplainer from src.explainers.base.
 
 from __future__ import annotations
 
+import logging
 import time
 import numpy as np
 from typing import Any, Dict, List, Optional

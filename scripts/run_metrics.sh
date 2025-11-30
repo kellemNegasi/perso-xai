@@ -9,15 +9,21 @@ fi
 EXPERIMENT_SUITE="$1"
 MODEL_OVERRIDE="${2:-}"
 
+RESULTS_DIR=experiment_results
+DETAIL_DIR="$RESULTS_DIR/detailed_explanations"
+METRICS_DIR="$RESULTS_DIR/metrics_results"
+
+mkdir -p "$RESULTS_DIR" "$DETAIL_DIR" "$METRICS_DIR"
+
 cmd=(
   python -m src.cli.main "$EXPERIMENT_SUITE"
   --reuse-trained-models
   --use-tuned-params
-  --reuse-detailed-explanations
   --write-detailed-explanations
-  --detailed-output-dir saved_models/detailed_explanations
+  --detailed-output-dir "$DETAIL_DIR"
   --write-metric-results
-  --metrics-output-dir saved_models/metrics_results
+  --metrics-output-dir "$METRICS_DIR"
+  --output-dir "$RESULTS_DIR"
   --model-store-dir saved_models
   --log-level INFO
 )

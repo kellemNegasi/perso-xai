@@ -55,4 +55,4 @@ causal_shap:
         method_max_instances: 50
         sampling_strategy: random
         causal_shap_corr_threshold: 0.3
-        causal_shap_coalitions: 50
+        causal_shap_coalitions: 20

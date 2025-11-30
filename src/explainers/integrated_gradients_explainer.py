@@ -195,13 +195,17 @@ class IntegratedGradientsExplainer(BaseExplainer):
     def _finite_difference_gradient(
         self, point: np.ndarray, epsilon: float
     ) -> np.ndarray:
-        grad = np.zeros_like(point, dtype=float)
-        for j in range(len(point)):
-            perturb = np.zeros_like(point)
-            perturb[j] = epsilon
-            plus_val = self._scalar_prediction(point + perturb)
-            minus_val = self._scalar_prediction(point - perturb)
-            grad[j] = (plus_val - minus_val) / (2 * epsilon)
+        n_features = len(point)
+        if n_features == 0:
+            return np.zeros_like(point, dtype=float)
+        perturbations = np.repeat(point.reshape(1, -1), 2 * n_features, axis=0)
+        indices = np.arange(n_features)
+        perturbations[:n_features, indices] += epsilon
+        perturbations[n_features:, indices] -= epsilon
+        scores = self._batched_scalar_predictions(perturbations)
+        plus_vals = scores[:n_features]
+        minus_vals = scores[n_features:]
+        grad = (plus_vals - minus_vals) / (2 * epsilon)
         return grad
 
     def _scalar_prediction(self, point: np.ndarray) -> float:
@@ -219,3 +223,22 @@ class IntegratedGradientsExplainer(BaseExplainer):
 
         preds = np.asarray(self._predict_numeric(row)).ravel()
         return float(preds[0])
+
+    def _batched_scalar_predictions(self, points: np.ndarray) -> np.ndarray:
+        if hasattr(self.model, "predict_proba"):
+            proba = np.asarray(self.model.predict_proba(points))
+            target = self._expl_cfg.get("ig_target_class")
+            if target is not None:
+                target_idx = int(target)
+                if proba.ndim > 1 and 0 <= target_idx < proba.shape[1]:
+                    return proba[:, target_idx].astype(float)
+            if proba.ndim > 1:
+                if proba.shape[1] > 1:
+                    return proba[:, 1].astype(float)
+                return proba[:, 0].astype(float)
+            return proba.astype(float).ravel()
+
+        preds = np.asarray(self._predict_numeric(points))
+        if preds.ndim == 1:
+            return preds.astype(float)
+        return preds[:, 0].astype(float)

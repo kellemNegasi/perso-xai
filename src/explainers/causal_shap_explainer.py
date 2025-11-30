@@ -31,9 +31,15 @@ class CausalSHAPExplainer(BaseExplainer):
         super().__init__(config=config, model=model, dataset=dataset)
         self._X_train: Optional[np.ndarray] = getattr(dataset, "X_train", None)
         self._y_train: Optional[np.ndarray] = getattr(dataset, "y_train", None)
+        self._rng = np.random.default_rng(self.random_state)
+        self._causal_graph_cache: Dict[Tuple[str, ...], Dict[str, List[str]]] = {}
+        self._baseline_vector: Optional[np.ndarray] = None
+        self._baseline_prediction: Optional[float] = None
 
     def fit(self, X: ArrayLike, y: Optional[ArrayLike] = None) -> None:
         self._X_train, self._y_train = self._coerce_X_y(X, y)
+        self._baseline_vector = None
+        self._baseline_prediction = None
 
     def explain_instance(self, instance: InstanceLike) -> Dict[str, Any]:
         inst2d = self._to_numpy_2d(instance)
@@ -137,6 +143,10 @@ class CausalSHAPExplainer(BaseExplainer):
     def _infer_causal_structure(
         self, X_train: np.ndarray, feature_names: List[str]
     ) -> Dict[str, List[str]]:
+        key = tuple(feature_names)
+        cached = self._causal_graph_cache.get(key)
+        if cached is not None:
+            return cached
         corr_threshold = float(self._expl_cfg.get("causal_shap_corr_threshold", 0.3))
         corr = np.corrcoef(X_train.T)
         graph: Dict[str, List[str]] = {}
@@ -149,6 +159,7 @@ class CausalSHAPExplainer(BaseExplainer):
                 if abs(corr[i, j]) >= corr_threshold and j < i:
                     parents.append(feature_names[j])
             graph[fname] = parents
+        self._causal_graph_cache[key] = graph
         return graph
 
     def _causal_shap(
@@ -158,9 +169,17 @@ class CausalSHAPExplainer(BaseExplainer):
         causal_graph: Dict[str, List[str]],
         feature_names: List[str],
     ) -> Tuple[np.ndarray, Dict[str, Any]]:
-        baseline = np.mean(X_train, axis=0)
+        baseline = self._baseline_vector
+        baseline_pred = self._baseline_prediction
+        if baseline is None:
+            baseline = np.mean(X_train, axis=0)
+            self._baseline_vector = baseline
+        if baseline_pred is None:
+            baseline_pred = float(
+                np.asarray(self._predict_numeric(baseline.reshape(1, -1))).ravel()[0]
+            )
+            self._baseline_prediction = baseline_pred
         base_pred = float(np.asarray(self._predict_numeric(instance.reshape(1, -1))).ravel()[0])
-        baseline_pred = float(np.asarray(self._predict_numeric(baseline.reshape(1, -1))).ravel()[0])
 
         n_features = len(instance)
         coalition_samples = int(self._expl_cfg.get("causal_shap_coalitions", 50))
@@ -206,14 +225,13 @@ class CausalSHAPExplainer(BaseExplainer):
         n_features: int,
         parent_indices: List[int],
     ) -> List[int]:
-        rng = np.random.default_rng(self.random_state)
-        coalition_size = rng.integers(low=0, high=max(1, n_features - 1))
+        coalition_size = self._rng.integers(low=0, high=max(1, n_features - 1))
         coalition = []
         for parent in parent_indices:
-            if rng.random() < 0.8:
+            if self._rng.random() < 0.8:
                 coalition.append(parent)
 
         others = [i for i in range(n_features) if i != feature_idx and i not in coalition]
-        rng.shuffle(others)
+        self._rng.shuffle(others)
         coalition.extend(others[: max(0, coalition_size - len(coalition))])
         return coalition

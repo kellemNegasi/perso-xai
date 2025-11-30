@@ -44,7 +44,7 @@ Local linear surrogate around each instance [(`src/explainers/lime_explainer.py`
 Finite-difference approximation of Integrated Gradients for tabular models [(src/explainers/integrated_gradients_explainer.py)](src/explainers/integrated_gradients_explainer.py). Parameters: `ig_steps` (number of interpolation points between baseline and instance) sets the Riemann approximation resolution, and `ig_epsilon` (finite-difference step) controls gradient accuracy. Baseline defaults to the training mean when available, otherwise zeros.
 
 ### Causal SHAP (`causal_shap`)
-Custom correlation-aware SHAP variant that infers a simple causal ordering from feature correlations before sampling coalitions [(`src/explainers/causal_shap_explainer.py`)](src/explainers/causal_shap_explainer.py). Parameters: `causal_shap_corr_threshold` determines when two features are considered linked (higher threshold → sparser graph) and `causal_shap_coalitions` sets the number of Monte Carlo coalitions sampled per feature (more samples reduce variance but cost more model calls).
+Custom correlation-aware SHAP variant that infers a simple causal ordering from feature correlations before sampling coalitions [(`src/explainers/causal_shap_explainer.py`)](src/explainers/causal_shap_explainer.py). Parameters: `causal_shap_corr_threshold` determines when two features are considered linked (higher threshold → sparser graph) and `causal_shap_coalitions` (default 20) sets the number of Monte Carlo coalitions sampled per feature. Causal graphs and baselines are cached per dataset to avoid recomputing them for every instance.
 
 ## Implemented Metrics
 

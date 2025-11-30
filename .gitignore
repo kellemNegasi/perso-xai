@@ -30,4 +30,6 @@ Thumbs.db
 */cache
 *.pdf
 *.txt
-!./saved_models/*.json
+*.json
+# keep all JSON files anywhere under saved_models/
+!saved_models/**/*.json

@@ -41,8 +41,8 @@ integrated_gradients:
         max_instances: 30
         method_max_instances: 50
         sampling_strategy: random
-        ig_steps: 20 # Sundararajan et al suggest that that somewhere between 20 and 300 steps are enough to approximate the integral (within 5%),.
-        ig_epsilon: 1e-6
+        ig_steps: 40 # Sundararajan et al suggest that that somewhere between 20 and 300 steps are enough to approximate the integral (within 5%),.
+        ig_epsilon: 1e-3
 
 causal_shap:
   <<: *tabular_explainer

@@ -30,8 +30,8 @@ Thumbs.db
 */cache
 *.pdf
 *.txt
-*.json
+experiment_results/*
+
+# *.json
 *.joblib
 # keep all JSON files anywhere under saved_models/
-!saved_models/tunning_results/*.json
-!saved_models/tunning_results/*.json

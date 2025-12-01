@@ -11,14 +11,20 @@ fi
 EXPERIMENT_SUITE="$1"
 MODEL_OVERRIDE="${2:-}"
 
+RESULTS_DIR=experiment_results
+DETAIL_DIR="$RESULTS_DIR/detailed_explanations"
+
+mkdir -p "$RESULTS_DIR" "$DETAIL_DIR"
+
 cmd=(
   python -m src.cli.main "$EXPERIMENT_SUITE"
-  --max-instances 30
   --reuse-trained-models
   --use-tuned-params
+  --reuse-detailed-explanations
   --stop-after-explanations
   --write-detailed-explanations
-  --detailed-output-dir saved_models/detailed_explanations
+  --detailed-output-dir "$DETAIL_DIR"
+  --output-dir "$RESULTS_DIR"
   --model-store-dir saved_models
   --log-level INFO
 )

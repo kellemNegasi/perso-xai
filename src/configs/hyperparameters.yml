@@ -24,6 +24,11 @@ grids:
     max_depth: [3, 5, 7]
     min_samples_split: [2, 5, 10]
     subsample: [0.8, 0.9, 1.0]
+  logistic_regression:
+    penalty: ['l2']
+    C: [0.001, 0.01, 0.1, 1.0, 10.0]
+    solver: ['lbfgs', 'saga']
+    max_iter: [200, 500]
   mlp: &mlp_defaults
     hidden_layer_sizes:
       - [50]

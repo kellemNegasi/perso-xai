@@ -1,44 +1,50 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-if [[ $# -lt 1 || $# -gt 2 ]]; then
-  echo "Usage: $0 <experiment_suite> [model_name]" >&2
-  exit 1
-fi
+# Ordered list of experiment suites to execute
+EXPERIMENT_SUITES=(
+  openml_adult_suite
+  openml_bank_suite
+  openml_german_suite
+  open_compas_suite
+)
 
-EXPERIMENT_SUITE="$1"
-MODEL_OVERRIDE="${2:-}"
+MODEL_OVERRIDE="${1:-}"
 
-RESULTS_DIR=experiment_results
+BASE_RESULTS_DIR="results"
+RUN_TIMESTAMP=$(date "+%d_%m_%d_%H_%M")
+RESULTS_DIR="$BASE_RESULTS_DIR/$RUN_TIMESTAMP"
 DETAIL_DIR="$RESULTS_DIR/detailed_explanations"
 METRICS_DIR="$RESULTS_DIR/metrics_results"
 
-mkdir -p "$RESULTS_DIR" "$DETAIL_DIR" "$METRICS_DIR"
+mkdir -p "$DETAIL_DIR" "$METRICS_DIR"
 
-cmd=(
-  python -m src.cli.main "$EXPERIMENT_SUITE"
-  --reuse-trained-models
-  --use-tuned-params
-  --write-detailed-explanations
-  --detailed-output-dir "$DETAIL_DIR"
-  --write-metric-results
-  --metrics-output-dir "$METRICS_DIR"
-  --output-dir "$RESULTS_DIR"
-  --model-store-dir saved_models
-  --log-level INFO
-)
+for EXPERIMENT_SUITE in "${EXPERIMENT_SUITES[@]}"; do
+  cmd=(
+    python -m src.cli.main "$EXPERIMENT_SUITE"
+    --reuse-trained-models
+    --tune-models
+    --use-tuned-params
+    --write-detailed-explanations
+    --detailed-output-dir "$DETAIL_DIR"
+    --write-metric-results
+    --metrics-output-dir "$METRICS_DIR"
+    --output-dir "$RESULTS_DIR"
+    --model-store-dir saved_models
+    --log-level INFO
+  )
 
-if [[ -n "$MODEL_OVERRIDE" ]]; then
-  cmd+=(--model "$MODEL_OVERRIDE")
-fi
+  if [[ -n "$MODEL_OVERRIDE" ]]; then
+    cmd+=(--model "$MODEL_OVERRIDE")
+  fi
 
-start_time=$(date +%s)
+  start_time=$(date +%s)
+  "${cmd[@]}"
+  end_time=$(date +%s)
 
-"${cmd[@]}"
-
-end_time=$(date +%s)
-elapsed=$((end_time - start_time))
-printf "Metrics run for '%s'%s finished in %02d:%02d:%02d\n" \
-  "$EXPERIMENT_SUITE" \
-  "${MODEL_OVERRIDE:+ (model: $MODEL_OVERRIDE)}" \
-  $((elapsed / 3600)) $(((elapsed % 3600) / 60)) $((elapsed % 60))
+  elapsed=$((end_time - start_time))
+  printf "Metrics run for '%s'%s finished in %02d:%02d:%02d\n" \
+    "$EXPERIMENT_SUITE" \
+    "${MODEL_OVERRIDE:+ (model: $MODEL_OVERRIDE)}" \
+    $((elapsed / 3600)) $(((elapsed % 3600) / 60)) $((elapsed % 60))
+done

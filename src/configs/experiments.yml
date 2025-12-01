@@ -18,68 +18,6 @@ openml_benchmark_defaults: &openml_benchmark_defaults
     - consistency_local
     - relative_input_stability
 
-tabular_demo_suite:
-  dataset:
-    key: tabular_toy
-  model:
-    key: random_forest
-  explainers:
-    - key: shap
-    - key: lime
-  metrics:
-    - correctness
-    - monotonicity_correlation
-    - infidelity
-    - completeness_deletion
-    - compactness_size
-    - covariate_complexity
-    - contrastivity_ssim
-    - confidence
-
-breast_cancer_rf_suite:
-  dataset:
-    key: breast_cancer
-  model:
-    key: random_forest
-  explainers:
-    - key: shap
-    - key: causal_shap
-  metrics:
-    - correctness
-    - monotonicity_correlation
-    - infidelity
-    - completeness_deletion
-    - compactness_size
-    - covariate_complexity
-    - contrastivity_ssim
-    - confidence
-
-breast_cancer_lr_suite:
-  dataset:
-    key: breast_cancer
-  model:
-    key: logistic_regression
-  explainers:
-    - key: shap
-    - key: causal_shap
-    - key: lime
-    - key: integrated_gradients
-  logging:
-    progress: true
-  metrics:
-    - correctness
-    - monotonicity_correlation
-    - infidelity
-    - continuity_stability
-    - completeness_deletion
-    - compactness_size
-    - covariate_complexity
-    - contrastivity_ssim
-    - confidence
-    - non_sensitivity
-    - consistency_local
-    - relative_input_stability
-
 openml_adult_suite:
   dataset:
     key: openml_adult_income
@@ -88,8 +26,8 @@ openml_adult_suite:
     - key: random_forest
     - key: gradient_boosting
     - key: mlp_classifier
-    # - key: hist_gradient_boosting
-    # - key: svm_rbf
+    - key: logistic_regression
+    - key: svm_rbf
   logging:
       progress: true
   <<: *openml_benchmark_defaults
@@ -102,8 +40,8 @@ openml_bank_suite:
     - key: random_forest
     - key: gradient_boosting
     - key: mlp_classifier
-    # - key: hist_gradient_boosting
-    # - key: svm_rbf
+    - key: logistic_regression
+    - key: svm_rbf
   logging:
       progress: true
   <<: *openml_benchmark_defaults
@@ -116,8 +54,22 @@ openml_german_suite:
     - key: random_forest
     - key: gradient_boosting
     - key: mlp_classifier
-    # - key: hist_gradient_boosting
-    # - key: svm_rbf
+    - key: logistic_regression
+    - key: svm_rbf
+  logging:
+      progress: true
+  <<: *openml_benchmark_defaults
+
+open_compas_suite:
+  dataset:
+    key: open_compas
+  models:
+    - key: decision_tree
+    - key: random_forest
+    - key: gradient_boosting
+    - key: mlp_classifier
+    - key: logistic_regression
+    - key: svm_rbf
   logging:
       progress: true
   <<: *openml_benchmark_defaults

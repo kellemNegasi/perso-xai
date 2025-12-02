@@ -247,7 +247,44 @@ def process_file(result_path: Path) -> Dict[str, Any]:
     }
 
 
-def process_detailed_model(dataset_name: str, model_dir: Path) -> Dict[str, Any]:
+def _load_metrics_map(
+    dataset_name: str,
+    model_name: str,
+    method_label: str,
+    metrics_dir: Path | None,
+) -> Dict[int, Dict[str, float]]:
+    if metrics_dir is None:
+        return {}
+    file_path = (
+        metrics_dir
+        / dataset_name
+        / model_name
+        / f"{method_label}_metrics.json"
+    )
+    if not file_path.exists():
+        return {}
+    try:
+        payload = json.loads(file_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return {}
+    metrics_map: Dict[int, Dict[str, float]] = {}
+    for record in payload.get("instances", []):
+        dataset_idx = record.get("dataset_index", record.get("instance_id"))
+        if dataset_idx is None:
+            continue
+        try:
+            dataset_idx_int = int(dataset_idx)
+        except (TypeError, ValueError):
+            continue
+        metrics_map[dataset_idx_int] = clean_metrics(record.get("metrics"))
+    return metrics_map
+
+
+def process_detailed_model(
+    dataset_name: str,
+    model_dir: Path,
+    metrics_dir: Path | None = None,
+) -> Dict[str, Any]:
     method_files = sorted(model_dir.glob("*_detailed_explanations.json"))
     if not method_files:
         return {
@@ -260,12 +297,23 @@ def process_detailed_model(dataset_name: str, model_dir: Path) -> Dict[str, Any]
 
     instance_meta: Dict[int, Dict[str, Any]] = {}
     candidates: Dict[int, List[Dict[str, Any]]] = defaultdict(list)
+    metrics_cache: Dict[str, Dict[int, Dict[str, float]]] = {}
     for file_path in method_files:
         method_label = file_path.stem.replace("_detailed_explanations", "")
+        method_metrics = metrics_cache.get(method_label)
+        if method_metrics is None:
+            method_metrics = _load_metrics_map(
+                dataset_name, model_dir.name, method_label, metrics_dir
+            )
+            metrics_cache[method_label] = method_metrics
         try:
-            records = json.loads(file_path.read_text(encoding="utf-8"))
+            raw = json.loads(file_path.read_text(encoding="utf-8"))
         except json.JSONDecodeError:
             continue
+        if isinstance(raw, dict):
+            records = raw.get("records") or raw.get("explanations") or []
+        else:
+            records = raw
         for record in records:
             dataset_idx = record.get("dataset_index")
             if dataset_idx is None:
@@ -277,6 +325,8 @@ def process_detailed_model(dataset_name: str, model_dir: Path) -> Dict[str, Any]
             except (TypeError, ValueError):
                 continue
             metrics = clean_metrics(record.get("metrics"))
+            if not metrics:
+                metrics = method_metrics.get(dataset_idx_int, {})
             if not metrics:
                 continue
             meta = instance_meta.setdefault(
@@ -439,7 +489,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         if not targets:
             raise SystemExit("No detailed explanation directories found to process.")
         for dataset_name, model_dir in targets:
-            payload = process_detailed_model(dataset_name, model_dir)
+            payload = process_detailed_model(dataset_name, model_dir, args.metrics_dir)
             output_path = output_dir / f"{dataset_name}__{model_dir.name}_pareto.json"
             with output_path.open("w", encoding="utf-8") as handle:
                 json.dump(payload, handle, indent=2)

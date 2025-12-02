@@ -31,7 +31,7 @@ Thumbs.db
 *.pdf
 *.txt
 experiment_results/*
-
+.env
 # *.json
 *.joblib
 # keep all JSON files anywhere under saved_models/

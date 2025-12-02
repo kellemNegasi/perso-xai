@@ -126,6 +126,16 @@ def build_parser() -> argparse.ArgumentParser:
         default=DEFAULT_MODEL_STORE_DIR / "metrics_results",
         help="Directory for per-method metric JSON artifacts (default: saved_models/metrics_results).",
     )
+    parser.add_argument(
+        "--skip-existing-experiments",
+        action="store_true",
+        help="Skip dataset/model runs when the destination experiment result already exists.",
+    )
+    parser.add_argument(
+        "--skip-existing-methods",
+        action="store_true",
+        help="Skip explainer runs when cached detailed explanations and metric files exist for that dataset/model.",
+    )
     return parser
 
 
@@ -165,6 +175,8 @@ def _run_with_model_override(
     metrics_output_dir: Path | None,
     stop_after_training: bool,
     stop_after_explanations: bool,
+    skip_existing_methods: bool,
+    skip_existing_experiments: bool,
 ) -> List[dict]:
     results: List[dict] = []
     for name in experiments:
@@ -190,6 +202,8 @@ def _run_with_model_override(
                 metrics_output_dir=metrics_output_dir,
                 stop_after_training=stop_after_training,
                 stop_after_explanations=stop_after_explanations,
+                skip_existing_methods=skip_existing_methods,
+                skip_if_output_exists=skip_existing_experiments,
             )
         )
     return results
@@ -262,6 +276,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             metrics_output_dir=args.metrics_output_dir,
             stop_after_training=args.stop_after_training,
             stop_after_explanations=args.stop_after_explanations,
+            skip_existing_methods=args.skip_existing_methods,
+            skip_existing_experiments=args.skip_existing_experiments,
         )
     else:
         results = run_experiments(
@@ -280,6 +296,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             metrics_output_dir=args.metrics_output_dir,
             stop_after_training=args.stop_after_training,
             stop_after_explanations=args.stop_after_explanations,
+            skip_existing_methods=args.skip_existing_methods,
+            skip_existing_experiments=args.skip_existing_experiments,
         )
 
     logger.info(

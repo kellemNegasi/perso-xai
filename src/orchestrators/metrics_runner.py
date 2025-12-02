@@ -53,6 +53,8 @@ def run_experiment(
     reuse_detailed_explanations: bool = False,
     write_metric_results: bool = False,
     metrics_output_dir: Optional[str | Path] = None,
+    skip_existing_methods: bool = False,
+    skip_if_output_exists: bool = False,
 ) -> Dict[str, Any]:
     """
     Execute a configured experiment (dataset/model/explainers/metrics).
@@ -89,6 +91,10 @@ def run_experiment(
         Persist per-method metric artifacts to disk.
     metrics_output_dir : str | Path | None, optional
         Base directory for structured metric outputs.
+    skip_existing_methods : bool, optional
+        Skip explainer runs when cached detailed and metric artifacts already exist.
+    skip_if_output_exists : bool, optional
+        Return the on-disk experiment result if output_path already exists.
 
     Returns
     -------
@@ -122,6 +128,23 @@ def run_experiment(
         model_name = model_entry
     else:
         raise ValueError(f"Experiment '{experiment_name}' is missing a model reference.")
+    if skip_if_output_exists and output_path is not None:
+        result_path = Path(output_path)
+        if result_path.exists():
+            LOGGER.info(
+                "Skipping experiment '%s' (model=%s); found existing result at %s",
+                experiment_name,
+                model_name,
+                result_path,
+            )
+            try:
+                return json.loads(result_path.read_text(encoding="utf-8"))
+            except Exception as exc:  # pragma: no cover - defensive
+                LOGGER.warning(
+                    "Failed to load cached experiment result from %s (%s); rerunning.",
+                    result_path,
+                    exc,
+                )
     explainer_configs = exp_cfg.get("explainers")
     if not explainer_configs and exp_cfg.get("explainer"):
         explainer_configs = [exp_cfg["explainer"]]
@@ -282,7 +305,6 @@ def run_experiment(
     explainer_outputs: Dict[str, Dict[str, Any]] = {}
     detailed_paths: Dict[str, str] = {}
     detailed_dir: Optional[Path] = None
-    detailed_writers: Dict[str, "_IncrementalJSONWriter"] = {}
     if write_detailed_explanations or reuse_detailed_explanations:
         resolved_dir = Path(detailed_output_dir or Path("saved_models") / "detailed_explanations")
         dataset_dir = resolved_dir / dataset_name
@@ -301,30 +323,103 @@ def run_experiment(
         _ensure_dataset_metadata(dataset_metrics_dir, dataset_name, dataset_type, feature_names)
         metrics_dir = dataset_metrics_dir / model_name
         metrics_dir.mkdir(parents=True, exist_ok=True)
+    method_index_map: Dict[str, Dict[int, Tuple[int, Dict[str, Any]]]] = {}
+    all_dataset_indices: Set[int] = set()
+    precomputed_instance_metrics: Dict[str, Dict[int, Dict[str, float]]] = {}
+    precomputed_batch_metrics: Dict[str, Dict[str, float]] = {}
     for expl_name in explainer_names:
-        LOGGER.info("Generating explanations with '%s'", expl_name)
-        explainer = instantiate_explainer(
-            expl_name, model, dataset, data_type=dataset_type, logging_cfg=logging_cfg
-        )
+        detail_path: Optional[Path] = None
+        metrics_path: Optional[Path] = None
+        if detailed_dir is not None:
+            detail_path = detailed_dir / f"{expl_name}_detailed_explanations.json"
+        if metrics_dir is not None:
+            metrics_path = metrics_dir / f"{expl_name}_metrics.json"
+
+        explainer = None
         reused_explanations = False
         cached_path: Optional[Path] = None
         expl_results = None
-        if reuse_detailed_explanations and detailed_dir is not None:
-            cached_path = detailed_dir / f"{expl_name}_detailed_explanations.json"
-            cached = _load_cached_explanations(cached_path, expl_name)
-            if cached is not None:
-                expl_results = cached
-                reused_explanations = True
-                cached_method = cached.get("method", expl_name)
-                detailed_paths[cached_method] = str(cached_path)
+        method_label = expl_name
 
-        if expl_results is None:
+        skip_method = False
+        if (
+            skip_existing_methods
+            and detail_path is not None
+            and detail_path.exists()
+        ):
+            metrics_ready = not metric_objs
+            if metric_objs:
+                metrics_ready = metrics_path is not None and metrics_path.exists()
+            if metrics_ready:
+                cached = _load_cached_explanations(detail_path, expl_name)
+                if cached is not None:
+                    expl_results = cached
+                    reused_explanations = True
+                    method_label = cached.get("method", expl_name)
+                    detailed_paths[method_label] = str(detail_path)
+                    cached_path = detail_path
+                    skip_method = True
+                    if metrics_path is not None and metrics_path.exists():
+                        inst_metrics, batch_metrics = _load_cached_metrics(
+                            metrics_path, method_label
+                        )
+                        precomputed_instance_metrics[method_label] = inst_metrics or {}
+                        precomputed_batch_metrics[method_label] = batch_metrics or {}
+                        metric_paths[method_label] = str(metrics_path)
+                    else:
+                        precomputed_instance_metrics.setdefault(method_label, {})
+                        precomputed_batch_metrics.setdefault(method_label, {})
+
+        if not skip_method:
+            LOGGER.info("Generating explanations with '%s'", expl_name)
+            explainer = instantiate_explainer(
+                expl_name, model, dataset, data_type=dataset_type, logging_cfg=logging_cfg
+            )
+            if reuse_detailed_explanations and detail_path is not None:
+                cached_path = detail_path
+                cached = _load_cached_explanations(cached_path, expl_name)
+                if cached is not None:
+                    expl_results = cached
+                    reused_explanations = True
+                    cached_method = cached.get("method", expl_name)
+                    method_label = cached_method
+                    detailed_paths[cached_method] = str(cached_path)
+
+            if expl_results is None:
+                expl_results = explainer.explain_dataset(X_eval, y_eval)
+                method_label = expl_results.get("method", expl_name)
+            else:
+                method_label = expl_results.get("method", expl_name)
+        elif expl_results is None:
+            # Failed to load cached explanations; fall back to fresh computation.
+            skip_method = False
+            LOGGER.info(
+                "Cached artifacts missing or unreadable for '%s'; recomputing.", expl_name
+            )
+            explainer = instantiate_explainer(
+                expl_name, model, dataset, data_type=dataset_type, logging_cfg=logging_cfg
+            )
             expl_results = explainer.explain_dataset(X_eval, y_eval)
+            reused_explanations = False
+            cached_path = None
+            method_label = expl_results.get("method", expl_name)
 
-        method_label = expl_results.get("method", expl_name)
+        dataset_mapping: Dict[int, Tuple[int, Dict[str, Any]]] = {}
+        for local_idx, explanation in enumerate(expl_results.get("explanations", [])):
+            metadata = explanation.get("metadata") or {}
+            dataset_idx = metadata.get("dataset_index", local_idx)
+            try:
+                dataset_idx_int = int(dataset_idx)
+            except (TypeError, ValueError):
+                dataset_idx_int = int(local_idx)
+            dataset_mapping[dataset_idx_int] = (local_idx, explanation)
+        method_index_map[method_label] = dataset_mapping
+        all_dataset_indices.update(dataset_mapping.keys())
 
         batch_metrics: Dict[str, float] = {}
-        if metric_objs:
+        if method_label in precomputed_batch_metrics:
+            batch_metrics = dict(precomputed_batch_metrics[method_label])
+        elif metric_objs:
             for metric_name, metric in metric_objs.items():
                 caps = metric_caps[metric_name]
                 if caps["per_instance"] or not caps["requires_full_batch"]:
@@ -351,31 +446,23 @@ def run_experiment(
             write_detailed_explanations
             and detailed_dir is not None
             and not reused_explanations
-            and method_label not in detailed_writers
         ):
-            writer = _IncrementalJSONWriter(detailed_dir / f"{method_label}_detailed_explanations.json")
-            detailed_writers[method_label] = writer
+            target_path = detailed_dir / f"{method_label}_detailed_explanations.json"
+            _checkpoint_explanations(
+                method_label=method_label,
+                path=target_path,
+                dataset_mapping=dataset_mapping,
+                feature_names=feature_names,
+                y_pred=y_pred,
+                y_true=y_eval,
+                y_proba=y_proba,
+            )
+            detailed_paths[method_label] = str(target_path)
 
     # Collect per-instance metrics and assemble the final output structure.
     instances: List[Dict[str, Any]] = []
     explanation_metadata: Dict[str, Dict[int, Any]] = {}
     announced_metrics: Set[Tuple[str, str]] = set()
-    method_index_map: Dict[str, Dict[int, Tuple[int, Dict[str, Any]]]] = {}
-    all_dataset_indices: Set[int] = set()
-    for expl_name, data in explainer_outputs.items():
-        expl_results = data["results"]
-        method_label = expl_results.get("method", expl_name)
-        mapping: Dict[int, Tuple[int, Dict[str, Any]]] = {}
-        for local_idx, explanation in enumerate(expl_results.get("explanations", [])):
-            metadata = explanation.get("metadata") or {}
-            dataset_idx = metadata.get("dataset_index", local_idx)
-            try:
-                dataset_idx_int = int(dataset_idx)
-            except (TypeError, ValueError):
-                dataset_idx_int = int(local_idx)
-            mapping[dataset_idx_int] = (local_idx, explanation)
-            all_dataset_indices.add(dataset_idx_int)
-        method_index_map[method_label] = mapping
 
     sorted_dataset_indices = sorted(all_dataset_indices)
     for position, dataset_idx in enumerate(sorted_dataset_indices):
@@ -406,7 +493,11 @@ def run_experiment(
             local_idx, explanation_i = lookup
 
             metrics_for_explainer: Dict[str, float] = {}
-            if metric_objs:
+            if method_label in precomputed_instance_metrics:
+                metrics_for_explainer.update(
+                    precomputed_instance_metrics[method_label].get(dataset_idx_int, {})
+                )
+            elif metric_objs:
                 for metric_name, metric in metric_objs.items():
                     caps = metric_caps[metric_name]
                     if not caps["per_instance"]:
@@ -429,8 +520,8 @@ def run_experiment(
                     )
                     metrics_for_explainer.update(_coerce_metric_dict(out))
 
-                for key, value in data["batch_metrics"].items():
-                    metrics_for_explainer.setdefault(key, value)
+            for key, value in data["batch_metrics"].items():
+                metrics_for_explainer.setdefault(key, value)
 
             metadata = dict(explanation_i.get("metadata") or {})
             recorded_dataset_idx = metadata.pop("dataset_index", None)
@@ -455,30 +546,6 @@ def run_experiment(
 
             explainer_records.append(explanation_entry)
 
-            writer = detailed_writers.get(method_label)
-            if writer is not None:
-                predicted_label = inst_record.get("predicted_label")
-                predicted_proba = inst_record.get("predicted_proba")
-                true_label = inst_record.get("true_label")
-                correct_prediction = (
-                    true_label is not None and predicted_label == true_label
-                )
-                record = {
-                    "instance_id": dataset_idx_int,
-                    "dataset_index": dataset_idx_int,
-                    "true_label": true_label,
-                    "prediction": predicted_label,
-                    "prediction_proba": predicted_proba,
-                    "correct_prediction": correct_prediction,
-                    "feature_names": feature_names,
-                    "feature_importance": attribution_values,
-                    "metadata": to_serializable(metadata) if metadata else {},
-                    "metrics": metrics_for_explainer,
-                }
-                if gen_time is not None:
-                    record["generation_time"] = float(gen_time)
-                writer.write(record)
-
             if write_metric_results:
                 metric_entry = {
                     "instance_id": int(dataset_idx_int),
@@ -486,9 +553,6 @@ def run_experiment(
                     "true_label": inst_record.get("true_label"),
                     "prediction": inst_record.get("predicted_label"),
                     "metrics": metrics_for_explainer,
-                    "metric_metadata": {
-                        "evaluated_metrics": list(metrics_for_explainer.keys()),
-                    },
                 }
                 metric_instance_records.setdefault(method_label, []).append(metric_entry)
 
@@ -502,13 +566,10 @@ def run_experiment(
         method_label = data["results"].get("method", expl_name)
         batch_metrics_result[method_label] = data["batch_metrics"]
 
-    if write_detailed_explanations and detailed_dir is not None:
-        for method_label, writer in detailed_writers.items():
-            file_path = writer.finalize()
-            detailed_paths[method_label] = str(file_path)
-
     if write_metric_results and metrics_dir is not None:
         for method_label in set(list(metric_instance_records.keys()) + list(batch_metrics_result.keys())):
+            if method_label in metric_paths:
+                continue
             records = metric_instance_records.get(method_label, [])
             batch_metrics = batch_metrics_result.get(method_label, {})
             path = _write_metric_results(
@@ -551,6 +612,8 @@ def run_experiments(
     reuse_detailed_explanations: bool = False,
     write_metric_results: bool = False,
     metrics_output_dir: Optional[str | Path] = None,
+    skip_existing_methods: bool = False,
+    skip_existing_experiments: bool = False,
 ) -> List[Dict[str, Any]]:
     """
     Run multiple experiments sequentially.
@@ -587,6 +650,10 @@ def run_experiments(
         Persist per-method metric outputs alongside explanations.
     metrics_output_dir : str | Path | None, optional
         Base directory for structured metric results.
+    skip_existing_methods : bool, optional
+        Skip explainer runs when cached artifacts exist.
+    skip_existing_experiments : bool, optional
+        Skip entire experiment when the destination output already exists.
 
     Returns
     -------
@@ -630,6 +697,8 @@ def run_experiments(
                 reuse_detailed_explanations=reuse_detailed_explanations,
                 write_metric_results=write_metric_results,
                 metrics_output_dir=metrics_output_dir,
+                skip_existing_methods=skip_existing_methods,
+                skip_if_output_exists=skip_existing_experiments,
             )
             results.append(experiment_result)
     return results
@@ -784,14 +853,79 @@ def _ensure_dataset_metadata(
     meta_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
 
 
+def _checkpoint_explanations(
+    *,
+    method_label: str,
+    path: Path,
+    dataset_mapping: Dict[int, Tuple[int, Dict[str, Any]]],
+    feature_names: List[str],
+    y_pred,
+    y_true,
+    y_proba,
+) -> None:
+    records: List[Dict[str, Any]] = []
+    for dataset_idx in sorted(dataset_mapping.keys()):
+        _, explanation = dataset_mapping[dataset_idx]
+        metadata = dict(explanation.get("metadata") or {})
+        metadata.pop("dataset_index", None)
+        predicted_label = _safe_scalar(_value_at(y_pred, dataset_idx))
+        true_label = _safe_scalar(_value_at(y_true, dataset_idx))
+        proba_raw = _value_at(y_proba, dataset_idx)
+        predicted_proba = (
+            None if proba_raw is None else np.asarray(proba_raw).tolist()
+        )
+        correct_prediction = (
+            true_label is not None and predicted_label == true_label
+        )
+        record: Dict[str, Any] = {
+            "instance_id": dataset_idx,
+            "dataset_index": dataset_idx,
+            "true_label": true_label,
+            "prediction": predicted_label,
+            "prediction_proba": predicted_proba,
+            "correct_prediction": correct_prediction,
+            "feature_importance": np.asarray(
+                explanation.get("attributions", [])
+            ).tolist(),
+            "metadata": to_serializable(metadata) if metadata else {},
+        }
+        gen_time = explanation.get("generation_time")
+        if gen_time is not None:
+            record["generation_time"] = float(gen_time)
+        records.append(record)
+    payload = {
+        "metadata": {
+            "feature_names": feature_names,
+            "n_features": len(feature_names),
+        },
+        "records": records,
+    }
+    serialized = json.dumps(to_serializable(payload), indent=2)
+    path.write_text(serialized, encoding="utf-8")
+    LOGGER.debug(
+        "Checkpointed %d explanations for %s at %s",
+        len(records),
+        method_label,
+        path,
+    )
+
+
 def _load_cached_explanations(file_path: Path, method_label: str) -> Optional[Dict[str, Any]]:
     if not file_path.exists():
         return None
     try:
-        raw_records = json.loads(file_path.read_text(encoding="utf-8"))
+        raw = json.loads(file_path.read_text(encoding="utf-8"))
     except Exception as exc:  # pragma: no cover - defensive logging
         LOGGER.warning("Failed to load cached explanations from %s: %s", file_path, exc)
         return None
+
+    feature_names = None
+    if isinstance(raw, dict):
+        raw_records = raw.get("records") or raw.get("explanations") or []
+        meta_block = raw.get("metadata") or {}
+        feature_names = meta_block.get("feature_names") or raw.get("feature_names")
+    else:
+        raw_records = raw
 
     explanations: List[Dict[str, Any]] = []
     for record in raw_records:
@@ -817,8 +951,43 @@ def _load_cached_explanations(file_path: Path, method_label: str) -> Optional[Di
         "info": {
             "source": "cached_file",
             "path": str(file_path),
+            "feature_names": feature_names,
         },
     }
+
+
+def _load_cached_metrics(
+    file_path: Path, method_label: str
+) -> Tuple[Dict[int, Dict[str, float]], Dict[str, float]]:
+    if not file_path.exists():
+        return {}, {}
+    try:
+        payload = json.loads(file_path.read_text(encoding="utf-8"))
+    except Exception as exc:  # pragma: no cover - defensive logging
+        LOGGER.warning("Failed to load cached metrics from %s: %s", file_path, exc)
+        return {}, {}
+    file_method = payload.get("method", method_label)
+    if file_method != method_label:
+        LOGGER.warning(
+            "Cached metrics file %s method=%s does not match expected label %s",
+            file_path,
+            file_method,
+            method_label,
+        )
+    instances: Dict[int, Dict[str, float]] = {}
+    for record in payload.get("instances", []):
+        dataset_idx = record.get("dataset_index", record.get("instance_id"))
+        if dataset_idx is None:
+            continue
+        try:
+            dataset_idx_int = int(dataset_idx)
+        except (TypeError, ValueError):
+            continue
+        metrics = _coerce_metric_dict(record.get("metrics") or {})
+        if metrics:
+            instances[dataset_idx_int] = metrics
+    batch_metrics = _coerce_metric_dict(payload.get("batch_metrics") or {})
+    return instances, batch_metrics
 
 
 def _extract_metric_parameters(metric: Any) -> Dict[str, Any]:
@@ -871,36 +1040,6 @@ def _write_metric_results(
     return str(file_path)
 
 
-class _IncrementalJSONWriter:
-    """Utility to stream explanation records to disk without holding full list."""
-
-    def __init__(self, path: Path):
-        self._path = path
-        self._handle = path.open("w", encoding="utf-8")
-        self._first = True
-        self._handle.write("[\n")
-
-    def write(self, record: Dict[str, Any]) -> None:
-        if self._handle is None:
-            raise RuntimeError("Writer has already been finalized.")
-        if not self._first:
-            self._handle.write(",\n")
-        else:
-            self._first = False
-        json.dump(to_serializable(record), self._handle)
-
-    def finalize(self) -> Path:
-        if self._handle is None:
-            return self._path
-        if self._first:
-            self._handle.write("]\n")
-        else:
-            self._handle.write("\n]\n")
-        self._handle.close()
-        self._handle = None
-        return self._path
-
-
 def _coerce_metric_dict(values: Optional[Dict[str, Any]]) -> Dict[str, float]:
     # Sanitize metric output to ensure all values are floats.
     # If there are nones or non-coercible values, they are skipped.
@@ -915,6 +1054,21 @@ def _coerce_metric_dict(values: Optional[Dict[str, Any]]) -> Dict[str, float]:
         except (TypeError, ValueError):
             continue
     return coerced
+
+
+def _value_at(sequence, index: int):
+    if sequence is None or index < 0:
+        return None
+    try:
+        length = len(sequence)
+    except TypeError:
+        return None
+    if index >= length:
+        return None
+    try:
+        return sequence[index]
+    except (IndexError, TypeError):
+        return None
 
 
 def _safe_scalar(value: Any) -> Any:

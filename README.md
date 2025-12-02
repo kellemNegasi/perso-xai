@@ -32,6 +32,8 @@ Every explainer now limits itself to a small, randomly sampled subset of the eva
 ### Structured Outputs
 Use `--write-detailed-explanations` to persist per-instance explanation payloads under `saved_models/detailed_explanations/<dataset>/<model>/<method>_detailed_explanations.json`. Re-run metrics without recomputing explainers by passing `--reuse-detailed-explanations`; the orchestrator will load any cached files before invoking the explainer. To emit per-method metric artifacts, add `--write-metric-results` (optionally override `--metrics-output-dir`): each metric run writes `saved_models/metrics_results/<dataset>/<model>/<method>_metrics.json` containing the instance-level scores, batch metrics, and evaluator metadata.
 
+Long-running sweeps can be resumed safely: add `--skip-existing-experiments` to avoid rerunning dataset/model pairs whose consolidated results already live in the destination output directory, and `--skip-existing-methods` to bypass any explainer whose cached detailed explanations and metric JSON files are already present under `saved_models`. The skipper still assembles the consolidated experiment JSON by loading those cached artifacts, so downstream tooling continues to see a full result.
+
 Set `experiment.logging.level` within an explainer’s config entry to throttle noisy INFO logs (e.g., SHAP now defaults to `WARNING`). Combine with `experiment.logging.progress` if you still want periodic progress updates without the full verbose output.
 
 ### SHAP (`shap`)

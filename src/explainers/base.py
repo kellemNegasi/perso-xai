@@ -494,31 +494,40 @@ class BaseExplainer(ABC):
         problem_type: str,
     ) -> np.ndarray:
         """Return indices according to the requested sampling strategy."""
+        def _finalize(selected: np.ndarray) -> np.ndarray:
+            selected = np.asarray(selected, dtype=int)
+            return self._ensure_min_class_labels(
+                selected,
+                y=y,
+                problem_type=problem_type,
+                min_classes=2,
+            )
+
         if max_n >= n_samples:
-            return np.arange(n_samples, dtype=int)
+            return _finalize(np.arange(n_samples, dtype=int))
 
         stratified_aliases = {"balanced", "stratified", "class_balanced"}
         quantile_aliases = {"quantile", "diverse", "range"}
 
         if strategy in stratified_aliases and y is not None and problem_type == "classification":
-            return self._balanced_class_indices(y, max_n)
+            return _finalize(self._balanced_class_indices(y, max_n))
 
         if strategy in quantile_aliases and y is not None and problem_type == "regression":
-            return self._quantile_sample_indices(y, max_n)
+            return _finalize(self._quantile_sample_indices(y, max_n))
 
         if strategy in {"random", "shuffle"}:
             rng = np.random.default_rng(self.random_state)
-            return rng.choice(n_samples, size=max_n, replace=False)
+            return _finalize(rng.choice(n_samples, size=max_n, replace=False))
 
         if strategy in {"sequential", "first"}:
-            return np.arange(max_n, dtype=int)
+            return _finalize(np.arange(max_n, dtype=int))
 
         # Fallbacks
         if problem_type == "classification" and y is not None:
-            return self._balanced_class_indices(y, max_n)
+            return _finalize(self._balanced_class_indices(y, max_n))
         if problem_type == "regression" and y is not None:
-            return self._quantile_sample_indices(y, max_n)
-        return np.arange(max_n, dtype=int)
+            return _finalize(self._quantile_sample_indices(y, max_n))
+        return _finalize(np.arange(max_n, dtype=int))
 
     def _balanced_class_indices(self, y: np.ndarray, max_n: int) -> np.ndarray:
         """Select up to ``max_n`` indices with roughly balanced class coverage."""
@@ -590,6 +599,54 @@ class BaseExplainer(ABC):
                 rng.shuffle(remaining)
                 selected = np.concatenate([selected, remaining[: max_n - len(selected)]])
         return selected.astype(int)
+
+    def _ensure_min_class_labels(
+        self,
+        indices: np.ndarray,
+        *,
+        y: Optional[np.ndarray],
+        problem_type: str,
+        min_classes: int,
+    ) -> np.ndarray:
+        """
+        Ensure the sampled indices span at least ``min_classes`` unique labels when possible.
+        """
+        if (
+            y is None
+            or problem_type != "classification"
+            or min_classes <= 1
+            or len(indices) < min_classes
+        ):
+            return indices
+        y_arr = np.asarray(y)
+        all_classes = np.unique(y_arr)
+        if len(all_classes) < min_classes:
+            return indices
+        selected_classes = np.unique(y_arr[indices])
+        if len(selected_classes) >= min_classes:
+            return indices
+        rng = np.random.default_rng(self.random_state)
+        target_class = selected_classes[0]
+        # Candidates from other classes not already selected.
+        other_candidates = np.where(y_arr != target_class)[0]
+        if other_candidates.size == 0:
+            return indices
+        other_candidates = np.setdiff1d(
+            other_candidates,
+            indices,
+            assume_unique=False,
+        )
+        if other_candidates.size == 0:
+            return indices
+        replacement = rng.choice(other_candidates)
+        selected_labels = y_arr[indices]
+        same_class_positions = np.where(selected_labels == target_class)[0]
+        if same_class_positions.size == 0:
+            return indices
+        drop_pos = same_class_positions[rng.integers(same_class_positions.size)]
+        indices = np.array(indices, copy=True)
+        indices[drop_pos] = int(replacement)
+        return indices
 
     def _augment_metadata(
         self,

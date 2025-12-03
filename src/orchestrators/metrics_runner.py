@@ -7,6 +7,7 @@ from __future__ import annotations
 import json
 import logging
 from datetime import datetime
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 
@@ -33,6 +34,15 @@ from .validation import validate_artifact_compatibility
 
 LOGGER = logging.getLogger(__name__)
 TABULAR_VALIDATOR = TabularDataValidator(VALIDATION_CFG.get("tabular", {}))
+
+
+@dataclass
+class MethodArtifact:
+    explainer_key: str
+    method_label: str
+    detail_path: Path
+    metrics_path: Optional[Path]
+    reused: bool = False
 
 
 def run_experiment(
@@ -301,107 +311,108 @@ def run_experiment(
                 "parameters": _extract_metric_parameters(metric),
             }
 
-    # Compute the explanations and batch-level metrics first.
-    explainer_outputs: Dict[str, Dict[str, Any]] = {}
+    # Prepare on-disk directories for per-method artifacts.
     detailed_paths: Dict[str, str] = {}
-    detailed_dir: Optional[Path] = None
-    if write_detailed_explanations or reuse_detailed_explanations:
-        resolved_dir = Path(detailed_output_dir or Path("saved_models") / "detailed_explanations")
-        dataset_dir = resolved_dir / dataset_name
-        dataset_dir.mkdir(parents=True, exist_ok=True)
-        _ensure_dataset_metadata(dataset_dir, dataset_name, dataset_type, feature_names)
-        detailed_dir = dataset_dir / model_name
-        detailed_dir.mkdir(parents=True, exist_ok=True)
+    resolved_detailed = Path(detailed_output_dir or Path("saved_models") / "detailed_explanations")
+    dataset_detail_dir = resolved_detailed / dataset_name
+    dataset_detail_dir.mkdir(parents=True, exist_ok=True)
+    _ensure_dataset_metadata(dataset_detail_dir, dataset_name, dataset_type, feature_names)
+    detailed_dir: Path = dataset_detail_dir / model_name
+    detailed_dir.mkdir(parents=True, exist_ok=True)
+    status_dir = detailed_dir / "_status"
+    status_dir.mkdir(parents=True, exist_ok=True)
 
-    metric_instance_records: Dict[str, List[Dict[str, Any]]] = {}
     metric_paths: Dict[str, str] = {}
     metrics_dir: Optional[Path] = None
-    if write_metric_results:
+    if metric_names:
         resolved_metrics = Path(metrics_output_dir or Path("saved_models") / "metrics_results")
         dataset_metrics_dir = resolved_metrics / dataset_name
         dataset_metrics_dir.mkdir(parents=True, exist_ok=True)
         _ensure_dataset_metadata(dataset_metrics_dir, dataset_name, dataset_type, feature_names)
         metrics_dir = dataset_metrics_dir / model_name
         metrics_dir.mkdir(parents=True, exist_ok=True)
-    method_index_map: Dict[str, Dict[int, Tuple[int, Dict[str, Any]]]] = {}
-    all_dataset_indices: Set[int] = set()
-    precomputed_instance_metrics: Dict[str, Dict[int, Dict[str, float]]] = {}
-    precomputed_batch_metrics: Dict[str, Dict[str, float]] = {}
-    for expl_name in explainer_names:
-        detail_path: Optional[Path] = None
-        metrics_path: Optional[Path] = None
-        if detailed_dir is not None:
-            detail_path = detailed_dir / f"{expl_name}_detailed_explanations.json"
-        if metrics_dir is not None:
-            metrics_path = metrics_dir / f"{expl_name}_metrics.json"
 
-        explainer = None
-        reused_explanations = False
-        cached_path: Optional[Path] = None
+    method_artifacts: List[MethodArtifact] = []
+    all_dataset_indices: Set[int] = set()
+    for expl_name in explainer_names:
+        status_path = status_dir / f"{expl_name}_status.json"
+        status_info = _load_completion_flag(status_path)
+        cached_detail_path = (
+            Path(status_info["detail_path"])
+            if status_info and status_info.get("detail_path")
+            else None
+        )
+        cached_metrics_path = (
+            Path(status_info["metrics_path"])
+            if status_info and status_info.get("metrics_path")
+            else None
+        )
+
+        can_reuse_method = (
+            status_info is not None
+            and cached_detail_path is not None
+            and cached_detail_path.exists()
+        )
+        if metric_objs:
+            can_reuse_method = can_reuse_method and (
+                cached_metrics_path is not None and cached_metrics_path.exists()
+            )
+
+        if skip_existing_methods and can_reuse_method:
+            method_label = status_info.get("method_label", expl_name)
+            dataset_indices = {int(idx) for idx in status_info.get("dataset_indices", [])}
+            all_dataset_indices.update(dataset_indices)
+            method_artifacts.append(
+                MethodArtifact(
+                    explainer_key=expl_name,
+                    method_label=method_label,
+                    detail_path=cached_detail_path,
+                    metrics_path=cached_metrics_path,
+                    reused=True,
+                )
+            )
+            if write_detailed_explanations:
+                detailed_paths[method_label] = str(cached_detail_path)
+            if write_metric_results and cached_metrics_path is not None:
+                metric_paths[method_label] = str(cached_metrics_path)
+            LOGGER.info(
+                "Skipping '%s' for model '%s'; using cached artifacts.",
+                expl_name,
+                model_name,
+            )
+            continue
+
+        LOGGER.info("Generating explanations with '%s'", expl_name)
+        explainer = instantiate_explainer(
+            expl_name, model, dataset, data_type=dataset_type, logging_cfg=logging_cfg
+        )
+
         expl_results = None
+        cached_path: Optional[Path] = None
         method_label = expl_name
 
-        skip_method = False
-        if (
-            skip_existing_methods
-            and detail_path is not None
-            and detail_path.exists()
-        ):
-            metrics_ready = not metric_objs
-            if metric_objs:
-                metrics_ready = metrics_path is not None and metrics_path.exists()
-            if metrics_ready:
-                cached = _load_cached_explanations(detail_path, expl_name)
-                if cached is not None:
-                    expl_results = cached
-                    reused_explanations = True
-                    method_label = cached.get("method", expl_name)
-                    detailed_paths[method_label] = str(detail_path)
-                    cached_path = detail_path
-                    skip_method = True
-                    if metrics_path is not None and metrics_path.exists():
-                        inst_metrics, batch_metrics = _load_cached_metrics(
-                            metrics_path, method_label
-                        )
-                        precomputed_instance_metrics[method_label] = inst_metrics or {}
-                        precomputed_batch_metrics[method_label] = batch_metrics or {}
-                        metric_paths[method_label] = str(metrics_path)
-                    else:
-                        precomputed_instance_metrics.setdefault(method_label, {})
-                        precomputed_batch_metrics.setdefault(method_label, {})
+        if reuse_detailed_explanations:
+            candidate_paths: List[Path] = []
+            if cached_detail_path is not None:
+                candidate_paths.append(cached_detail_path)
+            default_path = detailed_dir / f"{expl_name}_detailed_explanations.json"
+            if default_path not in candidate_paths:
+                candidate_paths.append(default_path)
+            for candidate in candidate_paths:
+                if not candidate.exists():
+                    continue
+                cached = _load_cached_explanations(candidate, expl_name)
+                if cached is None:
+                    continue
+                expl_results = cached
+                cached_path = candidate
+                method_label = cached.get("method", expl_name)
+                break
 
-        if not skip_method:
-            LOGGER.info("Generating explanations with '%s'", expl_name)
-            explainer = instantiate_explainer(
-                expl_name, model, dataset, data_type=dataset_type, logging_cfg=logging_cfg
-            )
-            if reuse_detailed_explanations and detail_path is not None:
-                cached_path = detail_path
-                cached = _load_cached_explanations(cached_path, expl_name)
-                if cached is not None:
-                    expl_results = cached
-                    reused_explanations = True
-                    cached_method = cached.get("method", expl_name)
-                    method_label = cached_method
-                    detailed_paths[cached_method] = str(cached_path)
-
-            if expl_results is None:
-                expl_results = explainer.explain_dataset(X_eval, y_eval)
-                method_label = expl_results.get("method", expl_name)
-            else:
-                method_label = expl_results.get("method", expl_name)
-        elif expl_results is None:
-            # Failed to load cached explanations; fall back to fresh computation.
-            skip_method = False
-            LOGGER.info(
-                "Cached artifacts missing or unreadable for '%s'; recomputing.", expl_name
-            )
-            explainer = instantiate_explainer(
-                expl_name, model, dataset, data_type=dataset_type, logging_cfg=logging_cfg
-            )
+        if expl_results is None:
             expl_results = explainer.explain_dataset(X_eval, y_eval)
-            reused_explanations = False
-            cached_path = None
+            method_label = expl_results.get("method", expl_name)
+        else:
             method_label = expl_results.get("method", expl_name)
 
         dataset_mapping: Dict[int, Tuple[int, Dict[str, Any]]] = {}
@@ -413,57 +424,93 @@ def run_experiment(
             except (TypeError, ValueError):
                 dataset_idx_int = int(local_idx)
             dataset_mapping[dataset_idx_int] = (local_idx, explanation)
-        method_index_map[method_label] = dataset_mapping
-        all_dataset_indices.update(dataset_mapping.keys())
+        dataset_indices = set(dataset_mapping.keys())
+        all_dataset_indices.update(dataset_indices)
 
         batch_metrics: Dict[str, float] = {}
-        if method_label in precomputed_batch_metrics:
-            batch_metrics = dict(precomputed_batch_metrics[method_label])
-        elif metric_objs:
-            for metric_name, metric in metric_objs.items():
-                caps = metric_caps[metric_name]
-                if caps["per_instance"] or not caps["requires_full_batch"]:
-                    continue
-                if log_progress:
-                    LOGGER.info("Running %s metric (batch) for %s", metric_name, expl_name)
-                out = metric.evaluate(
-                    model=model,
-                    explanation_results=expl_results,
-                    dataset=dataset,
-                    explainer=explainer,
-                )
-                batch_metrics.update(_coerce_metric_dict(out))
+        metric_records: List[Dict[str, Any]] = []
+        instance_metrics: Dict[int, Dict[str, float]] = {}
+        if metric_objs:
+            (
+                batch_metrics,
+                instance_metrics,
+            ) = _evaluate_metrics_for_method(
+                metric_objs=metric_objs,
+                metric_caps=metric_caps,
+                explainer=explainer,
+                expl_results=expl_results,
+                dataset_mapping=dataset_mapping,
+                model=model,
+                dataset=dataset,
+                method_label=method_label,
+                log_progress=log_progress,
+            )
+            for dataset_idx_int in sorted(instance_metrics.keys()):
+                metric_entry = {
+                    "instance_id": int(dataset_idx_int),
+                    "dataset_index": int(dataset_idx_int),
+                    "true_label": _safe_scalar(_value_at(y_eval, dataset_idx_int)),
+                    "prediction": _safe_scalar(_value_at(y_pred, dataset_idx_int)),
+                    "metrics": instance_metrics[dataset_idx_int],
+                }
+                metric_records.append(metric_entry)
 
-        explainer_outputs[expl_name] = {
-            "explainer": explainer,
-            "results": expl_results,
-            "batch_metrics": batch_metrics,
-            "method_label": method_label,
-            "reused": reused_explanations,
-            "cached_path": str(cached_path) if reused_explanations and cached_path else None,
-        }
-        if (
-            write_detailed_explanations
-            and detailed_dir is not None
-            and not reused_explanations
-        ):
-            target_path = detailed_dir / f"{method_label}_detailed_explanations.json"
+        detail_path = cached_path
+        if detail_path is None:
+            detail_path = detailed_dir / f"{method_label}_detailed_explanations.json"
             _checkpoint_explanations(
                 method_label=method_label,
-                path=target_path,
+                path=detail_path,
                 dataset_mapping=dataset_mapping,
                 feature_names=feature_names,
                 y_pred=y_pred,
                 y_true=y_eval,
                 y_proba=y_proba,
             )
-            detailed_paths[method_label] = str(target_path)
+
+        metrics_cache_path: Optional[Path] = None
+        if metric_objs and metrics_dir is not None:
+            metrics_cache_str = _write_metric_results(
+                metrics_dir=metrics_dir,
+                dataset_name=dataset_name,
+                model_name=model_name,
+                method_label=method_label,
+                instances=metric_records,
+                batch_metrics=batch_metrics,
+                metric_metadata=metric_metadata,
+            )
+            if metrics_cache_str:
+                metrics_cache_path = Path(metrics_cache_str)
+                if write_metric_results:
+                    metric_paths[method_label] = metrics_cache_str
+
+        if write_detailed_explanations:
+            detailed_paths[method_label] = str(detail_path)
+
+        method_artifacts.append(
+            MethodArtifact(
+                explainer_key=expl_name,
+                method_label=method_label,
+                detail_path=detail_path,
+                metrics_path=metrics_cache_path,
+                reused=cached_path is not None,
+            )
+        )
+
+        _write_completion_flag(
+            status_path=status_path,
+            explainer_key=expl_name,
+            method_label=method_label,
+            dataset_name=dataset_name,
+            model_name=model_name,
+            detail_path=detail_path,
+            metrics_path=metrics_cache_path,
+            dataset_indices=sorted(dataset_indices),
+        )
 
     # Collect per-instance metrics and assemble the final output structure.
-    instances: List[Dict[str, Any]] = []
     explanation_metadata: Dict[str, Dict[int, Any]] = {}
-    announced_metrics: Set[Tuple[str, str]] = set()
-
+    instances_lookup: Dict[int, Dict[str, Any]] = {}
     sorted_dataset_indices = sorted(all_dataset_indices)
     for position, dataset_idx in enumerate(sorted_dataset_indices):
         inst_record: Dict[str, Any] = {
@@ -480,109 +527,71 @@ def run_experiment(
             inst_record["true_label"] = None
         if y_proba is not None and 0 <= dataset_idx < len(y_proba):
             inst_record["predicted_proba"] = np.asarray(y_proba[dataset_idx]).tolist()
+        instances_lookup[int(dataset_idx)] = inst_record
 
-        explainer_records: List[Dict[str, Any]] = []
-        for expl_name, data in explainer_outputs.items():
-            expl_results = data["results"]
-            method_label = expl_results.get("method", expl_name)
-            explainer_obj = data["explainer"]
-            method_mapping = method_index_map.get(method_label, {})
-            lookup = method_mapping.get(int(dataset_idx))
-            if lookup is None:
-                continue
-            local_idx, explanation_i = lookup
+    batch_metrics_result: Dict[str, Dict[str, float]] = {}
+    for artifact in method_artifacts:
+        cached = _load_cached_explanations(artifact.detail_path, artifact.method_label)
+        if cached is None:
+            LOGGER.warning(
+                "Missing cached explanations for %s at %s; skipping attachment.",
+                artifact.method_label,
+                artifact.detail_path,
+            )
+            continue
 
-            metrics_for_explainer: Dict[str, float] = {}
-            if method_label in precomputed_instance_metrics:
-                metrics_for_explainer.update(
-                    precomputed_instance_metrics[method_label].get(dataset_idx_int, {})
+        instance_metrics: Dict[int, Dict[str, float]] = {}
+        method_batch_metrics: Dict[str, float] = {}
+        if artifact.metrics_path is not None and artifact.metrics_path.exists():
+            instance_metrics, method_batch_metrics = _load_cached_metrics(
+                artifact.metrics_path, artifact.method_label
+            )
+        batch_metrics_result[artifact.method_label] = method_batch_metrics
+
+        for explanation in cached.get("explanations", []):
+            metadata = dict(explanation.get("metadata") or {})
+            recorded_dataset_idx = metadata.pop("dataset_index", None)
+            fallback_idx = explanation.get("metadata_key")
+            try:
+                dataset_idx_int = (
+                    int(recorded_dataset_idx)
+                    if recorded_dataset_idx is not None
+                    else int(fallback_idx)
                 )
-            elif metric_objs:
-                for metric_name, metric in metric_objs.items():
-                    caps = metric_caps[metric_name]
-                    if not caps["per_instance"]:
-                        continue
-                    key = (metric_name, method_label)
-                    if key not in announced_metrics:
-                        LOGGER.info(
-                            "Running %s metric (per-instance) for %s",
-                            metric_name,
-                            method_label,
-                        )
-                        announced_metrics.add(key)
-                    payload = dict(expl_results)
-                    payload["current_index"] = local_idx
-                    out = metric.evaluate(
-                        model=model,
-                        explanation_results=payload,
-                        dataset=dataset,
-                        explainer=explainer_obj,
-                    )
-                    metrics_for_explainer.update(_coerce_metric_dict(out))
+            except (TypeError, ValueError):
+                continue
 
-            for key, value in data["batch_metrics"].items():
+            inst_record = instances_lookup.get(dataset_idx_int)
+            if inst_record is None:
+                continue
+
+            metrics_for_explainer: Dict[str, float] = dict(
+                instance_metrics.get(dataset_idx_int, {})
+            )
+            for key, value in method_batch_metrics.items():
                 metrics_for_explainer.setdefault(key, value)
 
-            metadata = dict(explanation_i.get("metadata") or {})
-            recorded_dataset_idx = metadata.pop("dataset_index", None)
-            dataset_idx_int = (
-                int(recorded_dataset_idx) if recorded_dataset_idx is not None else int(dataset_idx)
-            )
-
             if metadata:
-                metadata_bucket = explanation_metadata.setdefault(method_label, {})
+                metadata_bucket = explanation_metadata.setdefault(artifact.method_label, {})
                 metadata_bucket[dataset_idx_int] = to_serializable(metadata)
 
-            attribution_values = np.asarray(explanation_i.get("attributions", [])).tolist()
             explanation_entry: Dict[str, Any] = {
-                "method": method_label,
+                "method": artifact.method_label,
                 "metrics": metrics_for_explainer,
-                "attributions": attribution_values,
+                "attributions": np.asarray(explanation.get("attributions", [])).tolist(),
                 "metadata_key": dataset_idx_int,
             }
-            gen_time = explanation_i.get("generation_time")
+            gen_time = explanation.get("generation_time")
             if gen_time is not None:
                 explanation_entry["generation_time"] = float(gen_time)
 
-            explainer_records.append(explanation_entry)
+            inst_record.setdefault("explanations", []).append(explanation_entry)
 
-            if write_metric_results:
-                metric_entry = {
-                    "instance_id": int(dataset_idx_int),
-                    "dataset_index": int(dataset_idx_int),
-                    "true_label": inst_record.get("true_label"),
-                    "prediction": inst_record.get("predicted_label"),
-                    "metrics": metrics_for_explainer,
-                }
-                metric_instance_records.setdefault(method_label, []).append(metric_entry)
-
-        if not explainer_records:
-            continue
-        inst_record["explanations"] = explainer_records
-        instances.append(inst_record)
-
-    batch_metrics_result: Dict[str, Dict[str, float]] = {}
-    for expl_name, data in explainer_outputs.items():
-        method_label = data["results"].get("method", expl_name)
-        batch_metrics_result[method_label] = data["batch_metrics"]
-
-    if write_metric_results and metrics_dir is not None:
-        for method_label in set(list(metric_instance_records.keys()) + list(batch_metrics_result.keys())):
-            if method_label in metric_paths:
-                continue
-            records = metric_instance_records.get(method_label, [])
-            batch_metrics = batch_metrics_result.get(method_label, {})
-            path = _write_metric_results(
-                metrics_dir=metrics_dir,
-                dataset_name=dataset_name,
-                model_name=model_name,
-                method_label=method_label,
-                instances=records,
-                batch_metrics=batch_metrics,
-                metric_metadata=metric_metadata,
-            )
-            if path:
-                metric_paths[method_label] = path
+    instances: List[Dict[str, Any]] = []
+    for dataset_idx in sorted_dataset_indices:
+        record = instances_lookup.get(int(dataset_idx))
+        if record and record.get("explanations"):
+            instances.append(record)
 
     stage_label = "explanations" if stop_after_explanations else "metrics"
     return _finalize(
@@ -910,6 +919,40 @@ def _checkpoint_explanations(
     )
 
 
+def _write_completion_flag(
+    *,
+    status_path: Path,
+    explainer_key: str,
+    method_label: str,
+    dataset_name: str,
+    model_name: str,
+    detail_path: Path,
+    metrics_path: Optional[Path],
+    dataset_indices: Iterable[int],
+) -> None:
+    payload = {
+        "explainer": explainer_key,
+        "method_label": method_label,
+        "dataset": dataset_name,
+        "model": model_name,
+        "detail_path": str(detail_path),
+        "metrics_path": str(metrics_path) if metrics_path else None,
+        "dataset_indices": [int(idx) for idx in dataset_indices],
+        "completed_at": datetime.utcnow().isoformat(),
+    }
+    status_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+
+
+def _load_completion_flag(path: Path) -> Optional[Dict[str, Any]]:
+    if not path.exists():
+        return None
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except Exception as exc:  # pragma: no cover - defensive
+        LOGGER.warning("Failed to read completion flag from %s: %s", path, exc)
+        return None
+
+
 def _load_cached_explanations(file_path: Path, method_label: str) -> Optional[Dict[str, Any]]:
     if not file_path.exists():
         return None
@@ -988,6 +1031,61 @@ def _load_cached_metrics(
             instances[dataset_idx_int] = metrics
     batch_metrics = _coerce_metric_dict(payload.get("batch_metrics") or {})
     return instances, batch_metrics
+
+
+def _evaluate_metrics_for_method(
+    *,
+    metric_objs: Dict[str, Any],
+    metric_caps: Dict[str, Dict[str, Any]],
+    explainer,
+    expl_results: Dict[str, Any],
+    dataset_mapping: Dict[int, Tuple[int, Dict[str, Any]]],
+    model,
+    dataset,
+    method_label: str,
+    log_progress: bool,
+) -> Tuple[Dict[str, float], Dict[int, Dict[str, float]]]:
+    batch_metrics: Dict[str, float] = {}
+    instance_metrics: Dict[int, Dict[str, float]] = {}
+    if not metric_objs:
+        return batch_metrics, instance_metrics
+
+    for metric_name, metric in metric_objs.items():
+        caps = metric_caps[metric_name]
+        if caps["per_instance"]:
+            if log_progress:
+                LOGGER.info(
+                    "Running %s metric (per-instance) for %s", metric_name, method_label
+                )
+            for dataset_idx, (local_idx, _) in dataset_mapping.items():
+                payload = dict(expl_results)
+                payload["current_index"] = local_idx
+                out = metric.evaluate(
+                    model=model,
+                    explanation_results=payload,
+                    dataset=dataset,
+                    explainer=explainer,
+                )
+                values = _coerce_metric_dict(out)
+                if not values:
+                    continue
+                instance_entry = instance_metrics.setdefault(int(dataset_idx), {})
+                instance_entry.update(values)
+            continue
+
+        if not caps["requires_full_batch"]:
+            continue
+        if log_progress:
+            LOGGER.info("Running %s metric (batch) for %s", metric_name, method_label)
+        out = metric.evaluate(
+            model=model,
+            explanation_results=expl_results,
+            dataset=dataset,
+            explainer=explainer,
+        )
+        batch_metrics.update(_coerce_metric_dict(out))
+
+    return batch_metrics, instance_metrics
 
 
 def _extract_metric_parameters(metric: Any) -> Dict[str, Any]:

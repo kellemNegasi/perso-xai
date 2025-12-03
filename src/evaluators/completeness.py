@@ -391,14 +391,20 @@ class CompletenessEvaluator(MetricCapabilities):
         if prediction_value is None:
             return None
 
-        baseline_prediction = metadata.get("baseline_prediction")
-        if baseline_prediction is None:
+        baseline_prediction = None
+        baseline_provided = False
+        if "baseline_prediction" in metadata:
+            baseline_prediction = metadata.get("baseline_prediction")
+            baseline_provided = True
+        elif "expected_value" in metadata:
             baseline_prediction = metadata.get("expected_value")
+            baseline_provided = True
         if isinstance(baseline_prediction, (list, tuple, np.ndarray)):
             baseline_arr = np.asarray(baseline_prediction).ravel()
             baseline_prediction = float(baseline_arr[0]) if baseline_arr.size else 0.0
-        if baseline_prediction is None:
-            baseline_prediction = 0.0
+        if baseline_prediction is None and not baseline_provided:
+            return None
+        baseline_prediction = float(baseline_prediction or 0.0)
 
         score = self._tabular_completeness_score(
             importance, prediction_value, float(baseline_prediction)

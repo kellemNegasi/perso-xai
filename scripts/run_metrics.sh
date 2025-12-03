@@ -28,6 +28,8 @@ for EXPERIMENT_SUITE in "${EXPERIMENT_SUITES[@]}"; do
     --write-detailed-explanations
     --detailed-output-dir "$DETAIL_DIR"
     --write-metric-results
+    --skip-existing-experiments
+    --skip-existing-methods
     --metrics-output-dir "$METRICS_DIR"
     --output-dir "$RESULTS_DIR"
     --model-store-dir saved_models

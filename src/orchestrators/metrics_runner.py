@@ -206,25 +206,25 @@ def run_experiment(
         *,
         instances_data: List[Dict[str, Any]],
         batch_metrics_data: Dict[str, Dict[str, float]],
-        metadata_data: Dict[str, Dict[int, Any]],
         stage_completed: str,
         detailed_paths: Optional[Dict[str, str]] = None,
         metric_paths: Optional[Dict[str, str]] = None,
     ) -> Dict[str, Any]:
-        metadata_serialized = {
-            method: meta for method, meta in metadata_data.items() if meta
-        }
+        # Minimal payload to avoid duplicating heavy per-instance content; artifacts hold full data.
         result_payload = {
             "experiment": experiment_name,
             "dataset": dataset_name,
             "model": model_name,
-            "instances": instances_data,
-            "feature_names": feature_names,
-            "batch_metrics": batch_metrics_data,
-            "explanation_metadata": metadata_serialized,
             "stage_completed": stage_completed,
-            "detailed_explanations": detailed_paths or {},
-            "per_method_metric_files": metric_paths or {},
+            "counts": {
+                "instances": len(instances_data),
+                "explainers": len(explainer_names),
+            },
+            "artifacts": {
+                "detailed_explanations": detailed_paths or {},
+                "per_method_metric_files": metric_paths or {},
+                "batch_metrics": batch_metrics_data,
+            },
         }
         if output_path is not None:
             path = Path(output_path)
@@ -300,7 +300,6 @@ def run_experiment(
         return _finalize(
             instances_data=[],
             batch_metrics_data={},
-            metadata_data={},
             stage_completed="training",
             detailed_paths={},
         )
@@ -443,7 +442,7 @@ def run_experiment(
         else:
             method_label = expl_results.get("method", expl_name)
 
-        dataset_mapping: Dict[int, Tuple[int, Dict[str, Any]]] = {}
+        dataset_mapping: Dict[int, List[Tuple[int, Dict[str, Any]]]] = {}
         for local_idx, explanation in enumerate(expl_results.get("explanations", [])):
             metadata = explanation.get("metadata") or {}
             dataset_idx = metadata.get("dataset_index", local_idx)
@@ -451,13 +450,15 @@ def run_experiment(
                 dataset_idx_int = int(dataset_idx)
             except (TypeError, ValueError):
                 dataset_idx_int = int(local_idx)
-            dataset_mapping[dataset_idx_int] = (local_idx, explanation)
+            dataset_mapping.setdefault(dataset_idx_int, []).append(
+                (local_idx, explanation)
+            )
         dataset_indices = set(dataset_mapping.keys())
         all_dataset_indices.update(dataset_indices)
 
         batch_metrics: Dict[str, float] = {}
         metric_records: List[Dict[str, Any]] = []
-        instance_metrics: Dict[int, Dict[str, float]] = {}
+        instance_metrics: Dict[int, Dict[int, Dict[str, float]]] = {}
         if metric_objs:
             (
                 batch_metrics,
@@ -473,15 +474,25 @@ def run_experiment(
                 method_label=method_label,
                 log_progress=log_progress,
             )
+            # Build a per-explanation metric record so multiple explanations per instance are captured.
             for dataset_idx_int in sorted(instance_metrics.keys()):
-                metric_entry = {
-                    "instance_id": int(dataset_idx_int),
-                    "dataset_index": int(dataset_idx_int),
-                    "true_label": safe_scalar(value_at(y_eval, dataset_idx_int)),
-                    "prediction": safe_scalar(value_at(y_pred, dataset_idx_int)),
-                    "metrics": instance_metrics[dataset_idx_int],
-                }
-                metric_records.append(metric_entry)
+                metrics_by_local = instance_metrics[dataset_idx_int]
+                for local_idx in sorted(metrics_by_local.keys()):
+                    meta_lookup = {}
+                    entries = dataset_mapping.get(dataset_idx_int, [])
+                    for entry_local_idx, explanation in entries:
+                        meta_lookup[int(entry_local_idx)] = explanation.get("metadata") or {}
+                    metric_entry = {
+                        "instance_id": int(dataset_idx_int),
+                        "dataset_index": int(dataset_idx_int),
+                        "explanation_index": int(local_idx),
+                        "true_label": safe_scalar(value_at(y_eval, dataset_idx_int)),
+                        "prediction": safe_scalar(value_at(y_pred, dataset_idx_int)),
+                        "metrics": metrics_by_local[local_idx],
+                    }
+                    if meta_lookup.get(int(local_idx)):
+                        metric_entry["explanation_metadata"] = meta_lookup[int(local_idx)]
+                    metric_records.append(metric_entry)
 
         detail_path = cached_path
         if detail_path is None:
@@ -568,7 +579,7 @@ def run_experiment(
             )
             continue
 
-        instance_metrics: Dict[int, Dict[str, float]] = {}
+        instance_metrics: Dict[int, Dict[int, Dict[str, float]]] = {}
         method_batch_metrics: Dict[str, float] = {}
         if artifact.metrics_path is not None and artifact.metrics_path.exists():
             instance_metrics, method_batch_metrics = load_cached_metrics(
@@ -593,9 +604,27 @@ def run_experiment(
             if inst_record is None:
                 continue
 
-            metrics_for_explainer: Dict[str, float] = dict(
-                instance_metrics.get(dataset_idx_int, {})
-            )
+            metrics_for_explainer: Dict[str, float] = {}
+            metrics_bucket = instance_metrics.get(dataset_idx_int, {})
+            local_idx = metadata.get("instance_index")
+            selected_metrics: Optional[Dict[str, float]] = None
+            if isinstance(metrics_bucket, dict):
+                if local_idx is not None:
+                    try:
+                        selected_metrics = metrics_bucket.get(int(local_idx))
+                    except Exception:
+                        selected_metrics = None
+                if not selected_metrics:
+                    # Legacy shape (flat metrics dict) or fallback to first entry.
+                    all_values = list(metrics_bucket.values())
+                    if all_values and isinstance(all_values[0], dict):
+                        selected_metrics = all_values[0]
+                    elif metrics_bucket and all(
+                        isinstance(v, (int, float)) for v in metrics_bucket.values()
+                    ):
+                        selected_metrics = metrics_bucket  # legacy single metrics dict
+            if selected_metrics:
+                metrics_for_explainer.update(selected_metrics)
             for key, value in method_batch_metrics.items():
                 metrics_for_explainer.setdefault(key, value)
 
@@ -609,6 +638,11 @@ def run_experiment(
                 "attributions": np.asarray(explanation.get("attributions", [])).tolist(),
                 "metadata_key": dataset_idx_int,
             }
+            if "instance_index" in metadata:
+                try:
+                    explanation_entry["explanation_index"] = int(metadata.get("instance_index"))
+                except Exception:
+                    pass
             gen_time = explanation.get("generation_time")
             if gen_time is not None:
                 explanation_entry["generation_time"] = float(gen_time)
@@ -625,7 +659,6 @@ def run_experiment(
     result_payload = _finalize(
         instances_data=instances,
         batch_metrics_data=batch_metrics_result,
-        metadata_data=explanation_metadata,
         stage_completed=stage_label,
         detailed_paths=detailed_paths,
         metric_paths=metric_paths,

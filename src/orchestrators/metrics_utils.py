@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, Tuple, Optional
+from typing import Any, Dict, Tuple, Optional, Union, List
 
 import numpy as np
 
@@ -16,17 +16,32 @@ def evaluate_metrics_for_method(
     metric_caps: Dict[str, Dict[str, Any]],
     explainer,
     expl_results: Dict[str, Any],
-    dataset_mapping: Dict[int, Tuple[int, Dict[str, Any]]],
+    dataset_mapping: Dict[int, Union[Tuple[int, Dict[str, Any]], List[Tuple[int, Dict[str, Any]]]]],
     model,
     dataset,
     method_label: str,
     log_progress: bool,
 ) -> Tuple[Dict[str, float], Dict[int, Dict[str, float]]]:
-    """Execute metric evaluators for a single explainer method."""
+    """Execute metric evaluators for a single explainer method.
+
+    Returns
+    -------
+    batch_metrics : Dict[str, float]
+    instance_metrics : Dict[int, Dict[int, Dict[str, float]]]
+        Mapping dataset_index -> explanation_index (local_idx) -> metric values.
+    """
     batch_metrics: Dict[str, float] = {}
-    instance_metrics: Dict[int, Dict[str, float]] = {}
+    instance_metrics: Dict[int, Dict[int, Dict[str, float]]] = {}
     if not metric_objs:
         return batch_metrics, instance_metrics
+
+    def _iter_entries(mapping_value: Union[Tuple[int, Dict[str, Any]], List[Tuple[int, Dict[str, Any]]]]):
+        """Yield (local_idx, explanation) tuples regardless of single/list input."""
+        if isinstance(mapping_value, list):
+            for entry in mapping_value:
+                yield entry
+        else:
+            yield mapping_value
 
     for metric_name, metric in metric_objs.items():
         caps = metric_caps[metric_name]
@@ -35,20 +50,25 @@ def evaluate_metrics_for_method(
                 LOGGER.info(
                     "Running %s metric (per-instance) for %s", metric_name, method_label
                 )
-            for dataset_idx, (local_idx, _) in dataset_mapping.items():
-                payload = dict(expl_results)
-                payload["current_index"] = local_idx
-                out = metric.evaluate(
-                    model=model,
-                    explanation_results=payload,
-                    dataset=dataset,
-                    explainer=explainer,
-                )
-                values = coerce_metric_dict(out)
-                if not values:
-                    continue
-                instance_entry = instance_metrics.setdefault(int(dataset_idx), {})
-                instance_entry.update(values)
+            for dataset_idx, mapping_value in dataset_mapping.items():
+                for entry in _iter_entries(mapping_value):
+                    try:
+                        local_idx, _ = entry
+                    except (TypeError, ValueError):
+                        continue
+                    payload = dict(expl_results)
+                    payload["current_index"] = local_idx
+                    out = metric.evaluate(
+                        model=model,
+                        explanation_results=payload,
+                        dataset=dataset,
+                        explainer=explainer,
+                    )
+                    values = coerce_metric_dict(out)
+                    if not values:
+                        continue
+                    dataset_bucket = instance_metrics.setdefault(int(dataset_idx), {})
+                    dataset_bucket[int(local_idx)] = values
             continue
 
         if not caps["requires_full_batch"]:

@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import argparse
 import json
-from collections import defaultdict
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Sequence, Tuple
 
@@ -32,7 +31,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         choices=("aggregate", "detailed", "metrics"),
         default="aggregate",
         help="Source mode: 'aggregate' reads experiment JSON summaries; "
-        "'detailed' scans per-method detailed_explanations directories; "
+        "'detailed' scans detailed_explanations but now uses per-method metrics files; "
         "'metrics' loads per-method metrics JSON files (default: aggregate).",
     )
     parser.add_argument(
@@ -204,6 +203,7 @@ def process_file(result_path: Path) -> Dict[str, Any]:
     model = data.get("model")
     experiment = data.get("experiment")
     instances = data.get("instances") or []
+    exp_meta = data.get("explanation_metadata") or {}
 
     pareto_instances: List[Dict[str, Any]] = []
     for inst in instances:
@@ -213,11 +213,19 @@ def process_file(result_path: Path) -> Dict[str, Any]:
             metrics = clean_metrics(expl.get("metrics"))
             if not metrics:
                 continue
+            method = expl.get("method")
+            dataset_idx = inst.get("dataset_index")
+            meta_lookup = {}
+            if method is not None and dataset_idx is not None:
+                meta_lookup = (exp_meta.get(method) or {}).get(int(dataset_idx)) or {}
+            metadata = expl.get("metadata") or meta_lookup or {}
             candidates.append(
                 {
-                    "method": expl.get("method"),
+                    "method": method,
                     "metrics": metrics,
+                    "metadata": metadata,
                     "metadata_key": expl.get("metadata_key"),
+                    "explanation_index": expl.get("explanation_index"),
                 }
             )
         pareto = pareto_front(candidates)
@@ -247,88 +255,53 @@ def process_file(result_path: Path) -> Dict[str, Any]:
     }
 
 
-def _load_metrics_map(
-    dataset_name: str,
-    model_name: str,
-    method_label: str,
-    metrics_dir: Path | None,
-) -> Dict[int, Dict[str, float]]:
-    if metrics_dir is None:
-        return {}
-    file_path = (
-        metrics_dir
-        / dataset_name
-        / model_name
-        / f"{method_label}_metrics.json"
-    )
-    if not file_path.exists():
-        return {}
-    try:
-        payload = json.loads(file_path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError:
-        return {}
-    metrics_map: Dict[int, Dict[str, float]] = {}
-    for record in payload.get("instances", []):
-        dataset_idx = record.get("dataset_index", record.get("instance_id"))
-        if dataset_idx is None:
-            continue
-        try:
-            dataset_idx_int = int(dataset_idx)
-        except (TypeError, ValueError):
-            continue
-        metrics_map[dataset_idx_int] = clean_metrics(record.get("metrics"))
-    return metrics_map
+def _collect_metrics_candidates(
+    dataset_name: str, model_name: str, metrics_root: Path | None
+) -> Tuple[Dict[int, List[Dict[str, Any]]], Dict[int, Dict[str, Any]]]:
+    """
+    Load per-explanation metric entries for a dataset/model and return candidates per instance.
 
+    Returns
+    -------
+    candidates_map : dict[int, list[dict]]
+        dataset_index -> list of candidates {method, metrics, metadata, source_file, explanation_index}
+    instance_meta : dict[int, dict]
+        dataset_index -> metadata (true_label, predicted_label, etc.)
+    """
+    if metrics_root is None:
+        return {}, {}
+    model_dir = metrics_root / dataset_name / model_name
+    if not model_dir.exists():
+        return {}, {}
 
-def process_detailed_model(
-    dataset_name: str,
-    model_dir: Path,
-    metrics_dir: Path | None = None,
-) -> Dict[str, Any]:
-    method_files = sorted(model_dir.glob("*_detailed_explanations.json"))
-    if not method_files:
-        return {
-            "dataset": dataset_name,
-            "model": model_dir.name,
-            "source_dir": str(model_dir),
-            "n_instances": 0,
-            "instances": [],
-        }
-
+    candidates_map: Dict[int, List[Dict[str, Any]]] = {}
     instance_meta: Dict[int, Dict[str, Any]] = {}
-    candidates: Dict[int, List[Dict[str, Any]]] = defaultdict(list)
-    metrics_cache: Dict[str, Dict[int, Dict[str, float]]] = {}
-    for file_path in method_files:
-        method_label = file_path.stem.replace("_detailed_explanations", "")
-        method_metrics = metrics_cache.get(method_label)
-        if method_metrics is None:
-            method_metrics = _load_metrics_map(
-                dataset_name, model_dir.name, method_label, metrics_dir
-            )
-            metrics_cache[method_label] = method_metrics
+
+    for file_path in sorted(model_dir.glob("*_metrics.json")):
         try:
-            raw = json.loads(file_path.read_text(encoding="utf-8"))
+            payload = json.loads(file_path.read_text(encoding="utf-8"))
         except json.JSONDecodeError:
             continue
-        if isinstance(raw, dict):
-            records = raw.get("records") or raw.get("explanations") or []
-        else:
-            records = raw
-        for record in records:
-            dataset_idx = record.get("dataset_index")
-            if dataset_idx is None:
-                dataset_idx = record.get("instance_id")
+        method_label = payload.get("method") or file_path.stem.replace("_metrics", "")
+        for record in payload.get("instances", []):
+            dataset_idx = record.get("dataset_index", record.get("instance_id"))
             if dataset_idx is None:
                 continue
             try:
                 dataset_idx_int = int(dataset_idx)
             except (TypeError, ValueError):
                 continue
+
             metrics = clean_metrics(record.get("metrics"))
             if not metrics:
-                metrics = method_metrics.get(dataset_idx_int, {})
-            if not metrics:
                 continue
+            explanation_index = record.get("explanation_index")
+            try:
+                expl_idx = int(explanation_index) if explanation_index is not None else 0
+            except (TypeError, ValueError):
+                expl_idx = 0
+            expl_meta = record.get("explanation_metadata") or {}
+
             meta = instance_meta.setdefault(
                 dataset_idx_int,
                 {
@@ -337,7 +310,6 @@ def process_detailed_model(
                     "true_label": record.get("true_label"),
                     "predicted_label": record.get("prediction"),
                     "predicted_proba": record.get("prediction_proba"),
-                    "metadata": record.get("metadata"),
                 },
             )
             if meta.get("true_label") is None:
@@ -346,18 +318,43 @@ def process_detailed_model(
                 meta["predicted_label"] = record.get("prediction")
             if meta.get("predicted_proba") is None:
                 meta["predicted_proba"] = record.get("prediction_proba")
-            candidates[dataset_idx_int].append(
+
+            candidates_map.setdefault(dataset_idx_int, []).append(
                 {
                     "method": method_label,
                     "metrics": metrics,
+                    "metadata": expl_meta,
                     "source_file": str(file_path),
-                    "metadata": record.get("metadata"),
+                    "explanation_index": expl_idx,
                 }
             )
+    return candidates_map, instance_meta
+
+
+def process_detailed_model(
+    dataset_name: str,
+    model_dir: Path,
+    metrics_dir: Path | None = None,
+) -> Dict[str, Any]:
+    """
+    Detailed mode now relies on the per-method metrics files only (explanations no longer
+    include embedded metrics). We locate metrics under metrics_dir/<dataset>/<model>.
+    """
+    candidates_map, instance_meta = _collect_metrics_candidates(
+        dataset_name, model_dir.name, metrics_dir
+    )
+    if not candidates_map:
+        return {
+            "dataset": dataset_name,
+            "model": model_dir.name,
+            "source_dir": str(model_dir),
+            "n_instances": 0,
+            "instances": [],
+        }
 
     pareto_instances: List[Dict[str, Any]] = []
-    for dataset_idx in sorted(candidates.keys()):
-        front = pareto_front(candidates[dataset_idx])
+    for dataset_idx in sorted(candidates_map.keys()):
+        front = pareto_front(candidates_map[dataset_idx])
         if not front:
             continue
         metrics_keys = sorted({key for cand in front for key in cand["metrics"].keys()})
@@ -384,8 +381,10 @@ def process_detailed_model(
 
 
 def process_metrics_model(dataset_name: str, model_dir: Path) -> Dict[str, Any]:
-    metric_files = sorted(model_dir.glob("*_metrics.json"))
-    if not metric_files:
+    candidates_map, instance_meta = _collect_metrics_candidates(
+        dataset_name, model_dir.name, model_dir.parent.parent
+    )
+    if not candidates_map:
         return {
             "dataset": dataset_name,
             "model": model_dir.name,
@@ -394,55 +393,9 @@ def process_metrics_model(dataset_name: str, model_dir: Path) -> Dict[str, Any]:
             "instances": [],
         }
 
-    method_instances: Dict[int, List[Dict[str, Any]]] = defaultdict(list)
-    instance_meta: Dict[int, Dict[str, Any]] = {}
-
-    for file_path in metric_files:
-        try:
-            payload = json.loads(file_path.read_text(encoding="utf-8"))
-        except json.JSONDecodeError:
-            continue
-        method_label = payload.get("method") or file_path.stem.replace("_metrics", "")
-        for record in payload.get("instances", []):
-            dataset_idx = record.get("dataset_index")
-            if dataset_idx is None:
-                dataset_idx = record.get("instance_id")
-            if dataset_idx is None:
-                continue
-            try:
-                dataset_idx_int = int(dataset_idx)
-            except (TypeError, ValueError):
-                continue
-            metrics = clean_metrics(record.get("metrics"))
-            if not metrics:
-                continue
-            meta = instance_meta.setdefault(
-                dataset_idx_int,
-                {
-                    "dataset_index": dataset_idx_int,
-                    "instance_id": record.get("instance_id"),
-                    "true_label": record.get("true_label"),
-                    "predicted_label": record.get("prediction"),
-                    "predicted_proba": record.get("prediction_proba"),
-                },
-            )
-            if meta.get("true_label") is None:
-                meta["true_label"] = record.get("true_label")
-            if meta.get("predicted_label") is None:
-                meta["predicted_label"] = record.get("prediction")
-            if meta.get("predicted_proba") is None:
-                meta["predicted_proba"] = record.get("prediction_proba")
-            method_instances[dataset_idx_int].append(
-                {
-                    "method": method_label,
-                    "metrics": metrics,
-                    "source_file": str(file_path),
-                }
-            )
-
     pareto_instances: List[Dict[str, Any]] = []
-    for dataset_idx in sorted(method_instances.keys()):
-        front = pareto_front(method_instances[dataset_idx])
+    for dataset_idx in sorted(candidates_map.keys()):
+        front = pareto_front(candidates_map[dataset_idx])
         if not front:
             continue
         metric_keys = sorted({key for cand in front for key in cand["metrics"].keys()})

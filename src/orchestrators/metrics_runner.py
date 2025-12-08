@@ -31,7 +31,7 @@ from .persistence import (
     load_cached_metrics,
     load_completion_flag,
     write_completion_flag,
-    write_metric_results,
+    write_metric_results as persist_metric_results,
 )
 from .utils import (
     DATASET_REGISTRY,
@@ -576,7 +576,7 @@ def run_experiment(
         )
 
         if metric_objs and metrics_dir is not None:
-            metrics_cache_str = write_metric_results(
+            metrics_cache_str = persist_metric_results(
                 metrics_dir=metrics_dir,
                 dataset_name=dataset_name,
                 model_name=model_name,

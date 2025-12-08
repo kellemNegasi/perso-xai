@@ -36,6 +36,7 @@ from .persistence import (
 from .utils import (
     DATASET_REGISTRY,
     EXPLAINER_REGISTRY,
+    EXPLAINER_HPARAM_CFG,
     EXPERIMENT_CFG,
     MODEL_REGISTRY,
     VALIDATION_CFG,
@@ -178,6 +179,7 @@ def run_experiment(
     if not explainer_configs and exp_cfg.get("explainer"):
         explainer_configs = [exp_cfg["explainer"]]
     explainer_names = resolve_artifact_list(explainer_configs, "explainer")
+    expl_hparam_grids = EXPLAINER_HPARAM_CFG.get("explainers") or {}
     metric_names = exp_cfg.get("metrics", [])
 
     dataset_spec = DATASET_REGISTRY.get(dataset_name)
@@ -218,7 +220,7 @@ def run_experiment(
             "stage_completed": stage_completed,
             "counts": {
                 "instances": len(instances_data),
-                "explainers": len(explainer_names),
+                "explainers": len(explainer_variants),
             },
             "artifacts": {
                 "detailed_explanations": detailed_paths or {},
@@ -238,7 +240,7 @@ def run_experiment(
             experiment_name,
             stage_completed,
             len(instances_data),
-            len(explainer_names),
+            len(explainer_variants),
         )
         return result_payload
 
@@ -359,10 +361,36 @@ def run_experiment(
         metrics_dir = dataset_metrics_dir / model_name
         metrics_dir.mkdir(parents=True, exist_ok=True)
 
+    # Expand explainer names into variants using hyperparameter grids (one variant per combination).
+    def _expand_variants(name: str) -> List[Tuple[str, Dict[str, Any]]]:
+        grid = expl_hparam_grids.get(name) or {}
+        if not grid:
+            return [(name, {})]
+        from itertools import product
+
+        keys = sorted(grid.keys())
+        values = [grid[k] for k in keys]
+        variants: List[Tuple[str, Dict[str, Any]]] = []
+        for combo in product(*values):
+            override = {k: v for k, v in zip(keys, combo)}
+            parts = [f"{k}-{str(v).replace(' ', '')}" for k, v in override.items()]
+            suffix = "__".join(parts)
+            method_label = f"{name}__{suffix}"
+            variants.append((method_label, override))
+        return variants
+
+    explainer_variants: List[Tuple[str, str, Dict[str, Any]]] = []
+    for name in explainer_names:
+        for method_label, override in _expand_variants(name):
+            explainer_variants.append((name, method_label, override))
+
     method_artifacts: List[MethodArtifact] = []
     all_dataset_indices: Set[int] = set()
     for expl_name in explainer_names:
-        status_path = status_dir / f"{expl_name}_status.json"
+        variants = _expand_variants(expl_name)
+        base_label = expl_name
+
+        status_path = status_dir / f"{base_label}_status.json"
         status_info = load_completion_flag(status_path)
         cached_detail_path = (
             Path(status_info["detail_path"])
@@ -386,7 +414,7 @@ def run_experiment(
             )
 
         if skip_existing_methods and can_reuse_method:
-            method_label = status_info.get("method_label", expl_name)
+            method_label = status_info.get("method_label", base_label)
             dataset_indices = {int(idx) for idx in status_info.get("dataset_indices", [])}
             all_dataset_indices.update(dataset_indices)
             method_artifacts.append(
@@ -404,147 +432,188 @@ def run_experiment(
                 metric_paths[method_label] = str(cached_metrics_path)
             LOGGER.info(
                 "Skipping '%s' for model '%s'; using cached artifacts.",
-                expl_name,
+                method_label,
                 model_name,
             )
             continue
 
-        LOGGER.info("Generating explanations with '%s'", expl_name)
-        explainer = instantiate_explainer(
-            expl_name, model, dataset, data_type=dataset_type, logging_cfg=logging_cfg
+        # Optional reuse of cached explanations to compute metrics without recomputation.
+        cached_expl: Optional[Dict[str, Any]] = None
+        cached_variants: Dict[str, List[Dict[str, Any]]] = {}
+        max_cached_idx = -1
+        if reuse_detailed_explanations and cached_detail_path is not None and cached_detail_path.exists():
+            cached_expl = load_cached_explanations(cached_detail_path, base_label)
+            if cached_expl:
+                for expl in cached_expl.get("explanations", []):
+                    meta = expl.get("metadata") or {}
+                    mv = meta.get("method_variant")
+                    cached_variants.setdefault(mv, []).append(expl)
+                    idx_val = meta.get("instance_index")
+                    try:
+                        idx_int = int(idx_val)
+                        if idx_int > max_cached_idx:
+                            max_cached_idx = idx_int
+                    except (TypeError, ValueError):
+                        continue
+
+        LOGGER.info("Generating explanations with '%s' (%d variants)", expl_name, len(variants))
+
+        combined_dataset_mapping: Dict[int, List[Tuple[int, Dict[str, Any]]]] = {}
+        combined_metric_records: List[Dict[str, Any]] = []
+        combined_batch_metrics: Dict[str, float] = {}
+        batch_metrics_by_variant: Dict[str, Dict[str, float]] = {}
+        next_global_idx = max_cached_idx + 1 if max_cached_idx >= 0 else 0
+        combined_dataset_indices: Set[int] = set()
+
+        combined_detail_path: Optional[Path] = None
+        combined_metrics_path: Optional[Path] = None
+
+        for method_label, param_override in variants:
+            # Gather explanations: reuse cached for this variant when available, otherwise compute.
+            variant_explanations: List[Dict[str, Any]] = []
+            if cached_variants:
+                variant_explanations = cached_variants.get(method_label, [])
+
+            explainer = instantiate_explainer(
+                expl_name,
+                model,
+                dataset,
+                data_type=dataset_type,
+                logging_cfg=logging_cfg,
+                params_override=param_override,
+            )
+
+            if not variant_explanations:
+                expl_results = explainer.explain_dataset(X_eval, y_eval)
+                variant_explanations = expl_results.get("explanations", [])
+                method_label_final = expl_results.get("method", expl_name)
+            else:
+                expl_results = {
+                    "method": expl_name,
+                    "explanations": variant_explanations,
+                    "n_explanations": len(variant_explanations),
+                    "info": {"source": "cached_reuse"},
+                }
+                method_label_final = expl_name
+
+            if param_override:
+                for explanation in variant_explanations:
+                    meta = explanation.setdefault("metadata", {})
+                    meta.setdefault("hyperparameters", param_override)
+                    meta.setdefault("method_variant", method_label)
+
+            variant_mapping_local: Dict[int, List[Tuple[int, Dict[str, Any]]]] = {}
+            local_to_global: Dict[int, int] = {}
+            for local_idx, explanation in enumerate(variant_explanations):
+                metadata = explanation.get("metadata") or {}
+                dataset_idx = metadata.get("dataset_index", local_idx)
+                try:
+                    dataset_idx_int = int(dataset_idx)
+                except (TypeError, ValueError):
+                    dataset_idx_int = int(local_idx)
+                idx_val = metadata.get("instance_index")
+                try:
+                    global_idx = int(idx_val) if idx_val is not None else None
+                except (TypeError, ValueError):
+                    global_idx = None
+                if global_idx is None:
+                    global_idx = next_global_idx
+                    next_global_idx += 1
+                    metadata["instance_index"] = global_idx
+                local_to_global[local_idx] = global_idx
+                variant_mapping_local.setdefault(dataset_idx_int, []).append((local_idx, explanation))
+                combined_dataset_mapping.setdefault(dataset_idx_int, []).append((global_idx, explanation))
+                combined_dataset_indices.add(dataset_idx_int)
+
+            if metric_objs:
+                (
+                    batch_metrics,
+                    instance_metrics,
+                ) = evaluate_metrics_for_method(
+                    metric_objs=metric_objs,
+                    metric_caps=metric_caps,
+                    explainer=explainer,
+                    expl_results=expl_results,
+                    dataset_mapping=variant_mapping_local,
+                    model=model,
+                    dataset=dataset,
+                    method_label=method_label_final,
+                    log_progress=log_progress,
+                )
+                if batch_metrics:
+                    combined_batch_metrics.update(batch_metrics)
+                    batch_metrics_by_variant[method_label] = batch_metrics
+                for dataset_idx_int, metrics_by_local in instance_metrics.items():
+                    for local_idx, metrics_vals in metrics_by_local.items():
+                        global_idx = local_to_global.get(local_idx, local_idx)
+                        meta_lookup = {}
+                        entries = variant_mapping_local.get(dataset_idx_int, [])
+                        for entry_local_idx, explanation in entries:
+                            meta_lookup[int(entry_local_idx)] = explanation.get("metadata") or {}
+                        metric_entry = {
+                            "instance_id": int(dataset_idx_int),
+                            "dataset_index": int(dataset_idx_int),
+                            "explanation_index": int(global_idx),
+                            "true_label": safe_scalar(value_at(y_eval, dataset_idx_int)),
+                            "prediction": safe_scalar(value_at(y_pred, dataset_idx_int)),
+                            "metrics": metrics_vals,
+                        }
+                        if meta_lookup.get(int(local_idx)):
+                            metric_entry["explanation_metadata"] = meta_lookup[int(local_idx)]
+                        metric_entry["method_variant"] = method_label
+                        combined_metric_records.append(metric_entry)
+
+        combined_detail_path = detailed_dir / f"{base_label}_detailed_explanations.json"
+        checkpoint_explanations(
+            method_label=base_label,
+            path=combined_detail_path,
+            dataset_mapping=combined_dataset_mapping,
+            feature_names=feature_names,
+            y_pred=y_pred,
+            y_true=y_eval,
+            y_proba=y_proba,
         )
 
-        expl_results = None
-        cached_path: Optional[Path] = None
-        method_label = expl_name
-
-        if reuse_detailed_explanations:
-            candidate_paths: List[Path] = []
-            if cached_detail_path is not None:
-                candidate_paths.append(cached_detail_path)
-            default_path = detailed_dir / f"{expl_name}_detailed_explanations.json"
-            if default_path not in candidate_paths:
-                candidate_paths.append(default_path)
-            for candidate in candidate_paths:
-                if not candidate.exists():
-                    continue
-                cached = load_cached_explanations(candidate, expl_name)
-                if cached is None:
-                    continue
-                expl_results = cached
-                cached_path = candidate
-                method_label = cached.get("method", expl_name)
-                break
-
-        if expl_results is None:
-            expl_results = explainer.explain_dataset(X_eval, y_eval)
-            method_label = expl_results.get("method", expl_name)
-        else:
-            method_label = expl_results.get("method", expl_name)
-
-        dataset_mapping: Dict[int, List[Tuple[int, Dict[str, Any]]]] = {}
-        for local_idx, explanation in enumerate(expl_results.get("explanations", [])):
-            metadata = explanation.get("metadata") or {}
-            dataset_idx = metadata.get("dataset_index", local_idx)
-            try:
-                dataset_idx_int = int(dataset_idx)
-            except (TypeError, ValueError):
-                dataset_idx_int = int(local_idx)
-            dataset_mapping.setdefault(dataset_idx_int, []).append(
-                (local_idx, explanation)
-            )
-        dataset_indices = set(dataset_mapping.keys())
-        all_dataset_indices.update(dataset_indices)
-
-        batch_metrics: Dict[str, float] = {}
-        metric_records: List[Dict[str, Any]] = []
-        instance_metrics: Dict[int, Dict[int, Dict[str, float]]] = {}
-        if metric_objs:
-            (
-                batch_metrics,
-                instance_metrics,
-            ) = evaluate_metrics_for_method(
-                metric_objs=metric_objs,
-                metric_caps=metric_caps,
-                explainer=explainer,
-                expl_results=expl_results,
-                dataset_mapping=dataset_mapping,
-                model=model,
-                dataset=dataset,
-                method_label=method_label,
-                log_progress=log_progress,
-            )
-            # Build a per-explanation metric record so multiple explanations per instance are captured.
-            for dataset_idx_int in sorted(instance_metrics.keys()):
-                metrics_by_local = instance_metrics[dataset_idx_int]
-                for local_idx in sorted(metrics_by_local.keys()):
-                    meta_lookup = {}
-                    entries = dataset_mapping.get(dataset_idx_int, [])
-                    for entry_local_idx, explanation in entries:
-                        meta_lookup[int(entry_local_idx)] = explanation.get("metadata") or {}
-                    metric_entry = {
-                        "instance_id": int(dataset_idx_int),
-                        "dataset_index": int(dataset_idx_int),
-                        "explanation_index": int(local_idx),
-                        "true_label": safe_scalar(value_at(y_eval, dataset_idx_int)),
-                        "prediction": safe_scalar(value_at(y_pred, dataset_idx_int)),
-                        "metrics": metrics_by_local[local_idx],
-                    }
-                    if meta_lookup.get(int(local_idx)):
-                        metric_entry["explanation_metadata"] = meta_lookup[int(local_idx)]
-                    metric_records.append(metric_entry)
-
-        detail_path = cached_path
-        if detail_path is None:
-            detail_path = detailed_dir / f"{method_label}_detailed_explanations.json"
-            checkpoint_explanations(
-                method_label=method_label,
-                path=detail_path,
-                dataset_mapping=dataset_mapping,
-                feature_names=feature_names,
-                y_pred=y_pred,
-                y_true=y_eval,
-                y_proba=y_proba,
-            )
-
-        metrics_cache_path: Optional[Path] = None
         if metric_objs and metrics_dir is not None:
             metrics_cache_str = write_metric_results(
                 metrics_dir=metrics_dir,
                 dataset_name=dataset_name,
                 model_name=model_name,
-                method_label=method_label,
-                instances=metric_records,
-                batch_metrics=batch_metrics,
+                method_label=base_label,
+                instances=combined_metric_records,
+                batch_metrics=combined_batch_metrics,
                 metric_metadata=metric_metadata,
+                batch_metrics_by_variant=batch_metrics_by_variant,
             )
             if metrics_cache_str:
-                metrics_cache_path = Path(metrics_cache_str)
+                combined_metrics_path = Path(metrics_cache_str)
                 if write_metric_results:
-                    metric_paths[method_label] = metrics_cache_str
+                    metric_paths[base_label] = metrics_cache_str
+        else:
+            combined_metrics_path = None
 
         if write_detailed_explanations:
-            detailed_paths[method_label] = str(detail_path)
+            detailed_paths[base_label] = str(combined_detail_path)
 
         method_artifacts.append(
             MethodArtifact(
                 explainer_key=expl_name,
-                method_label=method_label,
-                detail_path=detail_path,
-                metrics_path=metrics_cache_path,
-                reused=cached_path is not None,
+                method_label=base_label,
+                detail_path=combined_detail_path,
+                metrics_path=combined_metrics_path,
+                reused=False,
             )
         )
 
         write_completion_flag(
             status_path=status_path,
             explainer_key=expl_name,
-            method_label=method_label,
+            method_label=base_label,
             dataset_name=dataset_name,
             model_name=model_name,
-            detail_path=detail_path,
-            metrics_path=metrics_cache_path,
-            dataset_indices=sorted(dataset_indices),
+            detail_path=combined_detail_path,
+            metrics_path=combined_metrics_path,
+            dataset_indices=sorted(combined_dataset_indices),
         )
 
     # Collect per-instance metrics and assemble the final output structure.

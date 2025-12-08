@@ -37,6 +37,7 @@ EXPLAINER_REGISTRY = ExplainerRegistry()
 METRIC_CFG = _load_config("metrics.yml")
 EXPERIMENT_CFG = _load_config("experiments.yml")
 VALIDATION_CFG = _load_config("validation.yml")
+EXPLAINER_HPARAM_CFG = _load_config("explainer_hyperparameters.yml")
 
 
 def _import_object(module_name: str, attr: str) -> Any:
@@ -86,6 +87,7 @@ def instantiate_explainer(
     *,
     data_type: Optional[str] = None,
     logging_cfg: Optional[Dict[str, Any]] = None,
+    params_override: Optional[Dict[str, Any]] = None,
 ):
     spec = EXPLAINER_REGISTRY.get(name)
     supported_types = spec.get("supported_data_types", ["tabular"])
@@ -96,6 +98,13 @@ def instantiate_explainer(
     config = {"type": spec["type"]}
     params = copy.deepcopy(spec.get("params", {}) or {})
     config.update(params)
+    if params_override:
+        # Merge overrides into experiment.explanation (most explainer params live here)
+        exp_cfg = config.setdefault("experiment", {})
+        expl_cfg = exp_cfg.setdefault("explanation", {})
+        expl_cfg.update(params_override)
+        # Also record overrides for downstream metadata (so hyperparameters can be surfaced)
+        config["_override_params"] = copy.deepcopy(params_override)
     if logging_cfg:
         experiment_cfg = config.setdefault("experiment", {})
         current_logging = experiment_cfg.get("logging", {}) or {}

@@ -220,7 +220,8 @@ def run_experiment(
             "stage_completed": stage_completed,
             "counts": {
                 "instances": len(instances_data),
-                "explainers": len(explainer_variants),
+                "base_explainers": len(explainer_names),
+                "explainer_variants": len(explainer_variants),
             },
             "artifacts": {
                 "detailed_explanations": detailed_paths or {},
@@ -240,7 +241,7 @@ def run_experiment(
             experiment_name,
             stage_completed,
             len(instances_data),
-            len(explainer_variants),
+            len(explainer_names),
         )
         return result_payload
 
@@ -650,10 +651,13 @@ def run_experiment(
 
         instance_metrics: Dict[int, Dict[int, Dict[str, float]]] = {}
         method_batch_metrics: Dict[str, float] = {}
+        method_batch_by_variant: Dict[str, Dict[str, float]] = {}
         if artifact.metrics_path is not None and artifact.metrics_path.exists():
-            instance_metrics, method_batch_metrics = load_cached_metrics(
-                artifact.metrics_path, artifact.method_label
-            )
+            (
+                instance_metrics,
+                method_batch_metrics,
+                method_batch_by_variant,
+            ) = load_cached_metrics(artifact.metrics_path, artifact.method_label)
         batch_metrics_result[artifact.method_label] = method_batch_metrics
 
         for explanation in cached.get("explanations", []):

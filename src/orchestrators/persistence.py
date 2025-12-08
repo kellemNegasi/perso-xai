@@ -224,7 +224,7 @@ def load_cached_explanations(file_path: Path, method_label: str) -> Optional[Dic
 
 def load_cached_metrics(
     file_path: Path, method_label: str
-) -> Tuple[Dict[int, Dict[int, Dict[str, float]]], Dict[str, float]]:
+) -> Tuple[Dict[int, Dict[int, Dict[str, float]]], Dict[str, float], Dict[str, Dict[str, float]]]:
     """Load cached per-instance/batch metrics for a method.
 
     Returns
@@ -232,14 +232,16 @@ def load_cached_metrics(
     instance_metrics : dict
         Mapping dataset_index -> explanation_index -> metrics dict.
     batch_metrics : dict
+    batch_metrics_by_variant : dict
+        Mapping method_variant -> batch metrics dict.
     """
     if not file_path.exists():
-        return {}, {}
+        return {}, {}, {}
     try:
         payload = json.loads(file_path.read_text(encoding="utf-8"))
     except Exception as exc:  # pragma: no cover - defensive logging
         LOGGER.warning("Failed to load cached metrics from %s: %s", file_path, exc)
-        return {}, {}
+        return {}, {}, {}
     file_method = payload.get("method", method_label)
     if file_method != method_label:
         LOGGER.warning(
@@ -267,7 +269,11 @@ def load_cached_metrics(
             bucket = instances.setdefault(dataset_idx_int, {})
             bucket[expl_idx_int] = metrics
     batch_metrics = coerce_metric_dict(payload.get("batch_metrics") or {})
-    return instances, batch_metrics
+    batch_by_variant_raw = payload.get("batch_metrics_by_variant") or {}
+    batch_metrics_by_variant: Dict[str, Dict[str, float]] = {}
+    for variant_label, metrics_map in batch_by_variant_raw.items():
+        batch_metrics_by_variant[variant_label] = coerce_metric_dict(metrics_map) if metrics_map else {}
+    return instances, batch_metrics, batch_metrics_by_variant
 
 
 def write_metric_results(

@@ -115,7 +115,7 @@ datasets:
   openml_german_credit:
     <<: *tabular_dataset
     source: openml:data_id=31
-    description: "Classifies people described by attributes as good or bad credit risks (data_id=31)."
+    description: "Classifies people described by attributes as good or bad credit risks (data_id=31). 1000 instances"
     loader:
       module: sklearn.datasets
       factory: fetch_openml
@@ -125,7 +125,7 @@ datasets:
       cache: true
       data_home: data/cache/openml
     split:
-      test_size: 0.3
+      test_size: 0.2
       random_state: 42
       stratify: true
     wrapper:
@@ -143,7 +143,7 @@ datasets:
       module: src.datasets.compas
       factory: load_compas_dataset
     loader_params:
-      test_size: 0.3
+      test_size: 0.2
       random_state: 42
       stratify: true
     validation:

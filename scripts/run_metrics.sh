@@ -3,7 +3,7 @@ set -euo pipefail
 
 # Ordered list of experiment suites to execute
 EXPERIMENT_SUITES=(
-  openml_adult_suite
+  # openml_adult_suite # very large datasets, skip for now
   openml_bank_suite
   openml_german_suite
   open_compas_suite

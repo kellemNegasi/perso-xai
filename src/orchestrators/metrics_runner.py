@@ -65,6 +65,7 @@ def run_experiment(
     metrics_output_dir: Optional[str | Path] = None,
     skip_existing_methods: bool = False,
     skip_if_output_exists: bool = False,
+    return_summary_only: bool = False,
 ) -> Dict[str, Any]:
     """
     Execute a configured experiment (dataset/model/explainers/metrics).
@@ -105,11 +106,13 @@ def run_experiment(
         Skip explainer runs when cached detailed and metric artifacts already exist.
     skip_if_output_exists : bool, optional
         Return the on-disk experiment result if output_path already exists.
+    return_summary_only : bool, optional
+        When True, return only a compact summary dict after persisting experiment artifacts.
 
     Returns
     -------
     Dict[str, Any]
-        Nested experiment result ready for JSON serialization.
+        Nested experiment result or a compact summary depending on ``return_summary_only``.
     """
     if stop_after_training and stop_after_explanations:
         raise ValueError(
@@ -221,6 +224,14 @@ def run_experiment(
             len(explainer_names),
         )
         return result_payload
+
+    def _build_summary(instances_data: List[Dict[str, Any]]) -> Dict[str, Any]:
+        return {
+            "experiment": experiment_name,
+            "dataset": dataset_name,
+            "model": model_name,
+            "instances": len(instances_data),
+        }
     LOGGER.info("Instantiating model '%s'", model_name)
     tuner: Optional[HyperparameterTuner] = None
     if tune_models or use_tuned_params:
@@ -594,7 +605,7 @@ def run_experiment(
             instances.append(record)
 
     stage_label = "explanations" if stop_after_explanations else "metrics"
-    return _finalize(
+    result_payload = _finalize(
         instances_data=instances,
         batch_metrics_data=batch_metrics_result,
         metadata_data=explanation_metadata,
@@ -602,6 +613,9 @@ def run_experiment(
         detailed_paths=detailed_paths,
         metric_paths=metric_paths,
     )
+    if return_summary_only:
+        return _build_summary(instances)
+    return result_payload
 
 
 def run_experiments(
@@ -623,6 +637,7 @@ def run_experiments(
     metrics_output_dir: Optional[str | Path] = None,
     skip_existing_methods: bool = False,
     skip_existing_experiments: bool = False,
+    return_summary_only: bool = False,
 ) -> List[Dict[str, Any]]:
     """
     Run multiple experiments sequentially.
@@ -663,11 +678,13 @@ def run_experiments(
         Skip explainer runs when cached artifacts exist.
     skip_existing_experiments : bool, optional
         Skip entire experiment when the destination output already exists.
+    return_summary_only : bool, optional
+        When True, each experiment returns a compact summary dict instead of the full payload.
 
     Returns
     -------
     list[dict]
-        List of experiment result dictionaries.
+        List of experiment payloads or summaries depending on ``return_summary_only``.
     """
     results: List[Dict[str, Any]] = []
     output_path = Path(output_dir) if output_dir is not None else None
@@ -708,6 +725,7 @@ def run_experiments(
                 metrics_output_dir=metrics_output_dir,
                 skip_existing_methods=skip_existing_methods,
                 skip_if_output_exists=skip_existing_experiments,
+                return_summary_only=return_summary_only,
             )
             results.append(experiment_result)
     return results

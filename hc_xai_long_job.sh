@@ -3,7 +3,8 @@
 # SLURM submission script for running HC-XAI experiments on the long queue.
 # Customize the environment variables below (PROJECT_ROOT, VENV_PATH, etc.)
 # before calling `sbatch scripts/hc_xai_long_job.sh`.
-#
+# Run as sbatch path/to/your/script.sh
+# check using squeue -u $USER
 # Job metadata -----------------------------------------------------------------
 #SBATCH -J hc_xai_long
 #SBATCH --output=slurm-%x.%j.out

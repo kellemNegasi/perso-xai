@@ -6,7 +6,7 @@ import argparse
 import json
 import logging
 from pathlib import Path
-from typing import Iterable, List, Sequence
+from typing import List, Sequence
 import sys
 from src.orchestrators.metrics_runner import run_experiment, run_experiments
 
@@ -177,6 +177,7 @@ def _run_with_model_override(
     stop_after_explanations: bool,
     skip_existing_methods: bool,
     skip_existing_experiments: bool,
+    return_summary_only: bool,
 ) -> List[dict]:
     results: List[dict] = []
     for name in experiments:
@@ -204,23 +205,10 @@ def _run_with_model_override(
                 stop_after_explanations=stop_after_explanations,
                 skip_existing_methods=skip_existing_methods,
                 skip_if_output_exists=skip_existing_experiments,
+                return_summary_only=return_summary_only,
             )
         )
     return results
-
-
-def _summarize(results: Iterable[dict]) -> List[dict]:
-    summary: List[dict] = []
-    for exp in results:
-        summary.append(
-            {
-                "experiment": exp.get("experiment"),
-                "dataset": exp.get("dataset"),
-                "model": exp.get("model"),
-                "instances": len(exp.get("instances", [])),
-            }
-        )
-    return summary
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -278,6 +266,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             stop_after_explanations=args.stop_after_explanations,
             skip_existing_methods=args.skip_existing_methods,
             skip_existing_experiments=args.skip_existing_experiments,
+            return_summary_only=True,
         )
     else:
         results = run_experiments(
@@ -298,6 +287,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             stop_after_explanations=args.stop_after_explanations,
             skip_existing_methods=args.skip_existing_methods,
             skip_existing_experiments=args.skip_existing_experiments,
+            return_summary_only=True,
         )
 
     logger.info(
@@ -307,7 +297,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
 
     if args.print_summary:
-        print(json.dumps(_summarize(results), indent=2))
+        print(json.dumps(results, indent=2))
 
     return 0
 

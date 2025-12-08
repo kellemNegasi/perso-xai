@@ -68,7 +68,8 @@ def evaluate_metrics_for_method(
                     if not values:
                         continue
                     dataset_bucket = instance_metrics.setdefault(int(dataset_idx), {})
-                    dataset_bucket[int(local_idx)] = values
+                    metrics_bucket = dataset_bucket.setdefault(int(local_idx), {})
+                    metrics_bucket.update(values)
             continue
 
         if not caps["requires_full_batch"]:

@@ -6,7 +6,6 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
@@ -17,6 +16,23 @@ from src.validators import TabularDataValidator
 from src.utils.hyperparameter_tuning import HyperparameterTuner
 from src.utils.model_persistence import ModelPersistence
 
+from .artifact_resolver import resolve_artifact_key, resolve_artifact_list
+from .dataset_utils import resolve_tuning_subset, run_dataset_validation
+from .metrics_utils import (
+    evaluate_metrics_for_method,
+    extract_metric_parameters,
+    safe_scalar,
+    value_at,
+)
+from .persistence import (
+    checkpoint_explanations,
+    ensure_dataset_metadata,
+    load_cached_explanations,
+    load_cached_metrics,
+    load_completion_flag,
+    write_completion_flag,
+    write_metric_results,
+)
 from .utils import (
     DATASET_REGISTRY,
     EXPLAINER_REGISTRY,
@@ -124,9 +140,9 @@ def run_experiment(
     logging_cfg = exp_cfg.get("logging", {}) or {}
     log_progress = bool(logging_cfg.get("progress"))
 
-    dataset_name = _resolve_artifact_key(exp_cfg.get("dataset"), "dataset")
-    configured_models = _resolve_artifact_list(exp_cfg.get("models"), "model")
-    model_entry = _resolve_artifact_key(
+    dataset_name = resolve_artifact_key(exp_cfg.get("dataset"), "dataset")
+    configured_models = resolve_artifact_list(exp_cfg.get("models"), "model")
+    model_entry = resolve_artifact_key(
         exp_cfg.get("model"), "model", required=False
     )
     if model_override is not None:
@@ -161,7 +177,7 @@ def run_experiment(
     explainer_configs = exp_cfg.get("explainers")
     if not explainer_configs and exp_cfg.get("explainer"):
         explainer_configs = [exp_cfg["explainer"]]
-    explainer_names = _resolve_artifact_list(explainer_configs, "explainer")
+    explainer_names = resolve_artifact_list(explainer_configs, "explainer")
     metric_names = exp_cfg.get("metrics", [])
 
     dataset_spec = DATASET_REGISTRY.get(dataset_name)
@@ -176,12 +192,13 @@ def run_experiment(
 
     LOGGER.info("Loading dataset '%s' (type=%s)", dataset_name, dataset_type)
     dataset = instantiate_dataset(dataset_name, data_type=dataset_type)
-    _run_dataset_validation(
+    run_dataset_validation(
         dataset_name=dataset_name,
         dataset_type=dataset_type,
         dataset_spec=dataset_spec,
         dataset=dataset,
         experiment_name=experiment_name,
+        validator=TABULAR_VALIDATOR,
     )
     feature_names = list(getattr(dataset, "feature_names", []) or [])
 
@@ -253,7 +270,7 @@ def run_experiment(
         params_override: Optional[Dict[str, Any]] = None
         if tuner:
             if tune_models:
-                X_tune, y_tune = _resolve_tuning_subset(
+                X_tune, y_tune = resolve_tuning_subset(
                     dataset_name=dataset_name,
                     dataset_spec=dataset_spec,
                     dataset=dataset,
@@ -319,7 +336,7 @@ def run_experiment(
                 "class": metric.__class__.__name__,
                 "per_instance": metric_caps[name]["per_instance"],
                 "requires_full_batch": metric_caps[name]["requires_full_batch"],
-                "parameters": _extract_metric_parameters(metric),
+                "parameters": extract_metric_parameters(metric),
             }
 
     # Prepare on-disk directories for per-method artifacts.
@@ -327,7 +344,7 @@ def run_experiment(
     resolved_detailed = Path(detailed_output_dir or Path("saved_models") / "detailed_explanations")
     dataset_detail_dir = resolved_detailed / dataset_name
     dataset_detail_dir.mkdir(parents=True, exist_ok=True)
-    _ensure_dataset_metadata(dataset_detail_dir, dataset_name, dataset_type, feature_names)
+    ensure_dataset_metadata(dataset_detail_dir, dataset_name, dataset_type, feature_names)
     detailed_dir: Path = dataset_detail_dir / model_name
     detailed_dir.mkdir(parents=True, exist_ok=True)
     status_dir = detailed_dir / "_status"
@@ -339,7 +356,7 @@ def run_experiment(
         resolved_metrics = Path(metrics_output_dir or Path("saved_models") / "metrics_results")
         dataset_metrics_dir = resolved_metrics / dataset_name
         dataset_metrics_dir.mkdir(parents=True, exist_ok=True)
-        _ensure_dataset_metadata(dataset_metrics_dir, dataset_name, dataset_type, feature_names)
+        ensure_dataset_metadata(dataset_metrics_dir, dataset_name, dataset_type, feature_names)
         metrics_dir = dataset_metrics_dir / model_name
         metrics_dir.mkdir(parents=True, exist_ok=True)
 
@@ -347,7 +364,7 @@ def run_experiment(
     all_dataset_indices: Set[int] = set()
     for expl_name in explainer_names:
         status_path = status_dir / f"{expl_name}_status.json"
-        status_info = _load_completion_flag(status_path)
+        status_info = load_completion_flag(status_path)
         cached_detail_path = (
             Path(status_info["detail_path"])
             if status_info and status_info.get("detail_path")
@@ -412,7 +429,7 @@ def run_experiment(
             for candidate in candidate_paths:
                 if not candidate.exists():
                     continue
-                cached = _load_cached_explanations(candidate, expl_name)
+                cached = load_cached_explanations(candidate, expl_name)
                 if cached is None:
                     continue
                 expl_results = cached
@@ -445,7 +462,7 @@ def run_experiment(
             (
                 batch_metrics,
                 instance_metrics,
-            ) = _evaluate_metrics_for_method(
+            ) = evaluate_metrics_for_method(
                 metric_objs=metric_objs,
                 metric_caps=metric_caps,
                 explainer=explainer,
@@ -460,8 +477,8 @@ def run_experiment(
                 metric_entry = {
                     "instance_id": int(dataset_idx_int),
                     "dataset_index": int(dataset_idx_int),
-                    "true_label": _safe_scalar(_value_at(y_eval, dataset_idx_int)),
-                    "prediction": _safe_scalar(_value_at(y_pred, dataset_idx_int)),
+                    "true_label": safe_scalar(value_at(y_eval, dataset_idx_int)),
+                    "prediction": safe_scalar(value_at(y_pred, dataset_idx_int)),
                     "metrics": instance_metrics[dataset_idx_int],
                 }
                 metric_records.append(metric_entry)
@@ -469,7 +486,7 @@ def run_experiment(
         detail_path = cached_path
         if detail_path is None:
             detail_path = detailed_dir / f"{method_label}_detailed_explanations.json"
-            _checkpoint_explanations(
+            checkpoint_explanations(
                 method_label=method_label,
                 path=detail_path,
                 dataset_mapping=dataset_mapping,
@@ -481,7 +498,7 @@ def run_experiment(
 
         metrics_cache_path: Optional[Path] = None
         if metric_objs and metrics_dir is not None:
-            metrics_cache_str = _write_metric_results(
+            metrics_cache_str = write_metric_results(
                 metrics_dir=metrics_dir,
                 dataset_name=dataset_name,
                 model_name=model_name,
@@ -508,7 +525,7 @@ def run_experiment(
             )
         )
 
-        _write_completion_flag(
+        write_completion_flag(
             status_path=status_path,
             explainer_key=expl_name,
             method_label=method_label,
@@ -529,11 +546,11 @@ def run_experiment(
             "dataset_index": int(dataset_idx),
         }
         if 0 <= dataset_idx < len(y_pred):
-            inst_record["predicted_label"] = _safe_scalar(y_pred[dataset_idx])
+            inst_record["predicted_label"] = safe_scalar(y_pred[dataset_idx])
         else:
             inst_record["predicted_label"] = None
         if y_eval is not None and 0 <= dataset_idx < len(y_eval):
-            inst_record["true_label"] = _safe_scalar(y_eval[dataset_idx])
+            inst_record["true_label"] = safe_scalar(y_eval[dataset_idx])
         else:
             inst_record["true_label"] = None
         if y_proba is not None and 0 <= dataset_idx < len(y_proba):
@@ -542,7 +559,7 @@ def run_experiment(
 
     batch_metrics_result: Dict[str, Dict[str, float]] = {}
     for artifact in method_artifacts:
-        cached = _load_cached_explanations(artifact.detail_path, artifact.method_label)
+        cached = load_cached_explanations(artifact.detail_path, artifact.method_label)
         if cached is None:
             LOGGER.warning(
                 "Missing cached explanations for %s at %s; skipping attachment.",
@@ -554,7 +571,7 @@ def run_experiment(
         instance_metrics: Dict[int, Dict[str, float]] = {}
         method_batch_metrics: Dict[str, float] = {}
         if artifact.metrics_path is not None and artifact.metrics_path.exists():
-            instance_metrics, method_batch_metrics = _load_cached_metrics(
+            instance_metrics, method_batch_metrics = load_cached_metrics(
                 artifact.metrics_path, artifact.method_label
             )
         batch_metrics_result[artifact.method_label] = method_batch_metrics
@@ -691,9 +708,9 @@ def run_experiments(
 
     for name in experiment_names:
         exp_cfg = EXPERIMENT_CFG[name]
-        model_list = _resolve_artifact_list(exp_cfg.get("models"), "model")
+        model_list = resolve_artifact_list(exp_cfg.get("models"), "model")
         if not model_list:
-            fallback = _resolve_artifact_key(
+            fallback = resolve_artifact_key(
                 exp_cfg.get("model"), "model", required=False
             )
             if fallback:
@@ -729,469 +746,3 @@ def run_experiments(
             )
             results.append(experiment_result)
     return results
-
-
-def _resolve_artifact_key(
-    entry: Any,
-    kind: str,
-    *,
-    required: bool = True,
-) -> Optional[str]:
-    if entry is None:
-        if required:
-            raise ValueError(f"Experiment is missing a '{kind}' reference.")
-        return None
-    if isinstance(entry, str):
-        return entry
-    if isinstance(entry, dict):
-        key = entry.get("key") or entry.get("name")
-        if key:
-            return str(key)
-    if required:
-        raise ValueError(
-            f"Experiment {kind} entries must be strings or mappings with a 'key'. Got: {entry!r}"
-        )
-    return None
-
-
-def _resolve_artifact_list(entries: Optional[Iterable[Any]], kind: str) -> List[str]:
-    if not entries:
-        return []
-    names: List[str] = []
-    for entry in entries:
-        key = _resolve_artifact_key(entry, kind)
-        if key:
-            names.append(key)
-    return names
-
-
-def _run_dataset_validation(
-    *,
-    dataset_name: str,
-    dataset_type: str,
-    dataset_spec: Dict[str, Any],
-    dataset,
-    experiment_name: str,
-):
-    if dataset_type != "tabular":
-        return
-    validation_cfg = (dataset_spec.get("validation") or {}).get("overrides") or {}
-    result = TABULAR_VALIDATOR.validate(
-        dataset=dataset,
-        dataset_name=dataset_name,
-        overrides=validation_cfg,
-    )
-    LOGGER.info(
-        "Validation summary for %s: %s warnings, %s errors",
-        dataset_name,
-        len(result.warnings),
-        len(result.errors),
-    )
-    for warning in result.warnings:
-        LOGGER.warning(
-            "Dataset validation warning for %s (%s): %s",
-            dataset_name,
-            experiment_name,
-            warning,
-        )
-    if not result.is_valid:
-        details = "; ".join(result.errors)
-        raise ValueError(
-            f"Experiment '{experiment_name}' failed dataset validation for '{dataset_name}': {details}"
-        )
-
-
-def _resolve_tuning_subset(
-    *,
-    dataset_name: str,
-    dataset_spec: Dict[str, Any],
-    dataset,
-):
-    tuning_cfg = (dataset_spec.get("tuning") or {}) if dataset_spec else {}
-    sample_fraction = tuning_cfg.get("sample_fraction")
-    max_samples = tuning_cfg.get("max_samples")
-    if sample_fraction is None and max_samples is None:
-        return dataset.X_train, dataset.y_train
-
-    try:
-        fraction = float(sample_fraction) if sample_fraction is not None else None
-    except (TypeError, ValueError):
-        raise ValueError(
-            f"Dataset '{dataset_name}' tuning.sample_fraction must be numeric. Got {sample_fraction!r}"
-        )
-    if fraction is not None:
-        if fraction <= 0 or fraction > 1:
-            raise ValueError(
-                f"Dataset '{dataset_name}' tuning.sample_fraction must be in (0, 1]. Got {fraction}"
-            )
-
-    try:
-        max_count = int(max_samples) if max_samples is not None else None
-    except (TypeError, ValueError):
-        raise ValueError(
-            f"Dataset '{dataset_name}' tuning.max_samples must be an integer. Got {max_samples!r}"
-        )
-    if max_count is not None and max_count <= 0:
-        raise ValueError(
-            f"Dataset '{dataset_name}' tuning.max_samples must be > 0. Got {max_count}"
-        )
-
-    X_train = dataset.X_train
-    y_train = dataset.y_train
-    n_train = len(X_train)
-    target = n_train
-    if fraction is not None:
-        target = min(target, max(1, int(round(n_train * fraction))))
-    if max_count is not None:
-        target = min(target, max_count)
-    if target >= n_train:
-        return X_train, y_train
-
-    seed = tuning_cfg.get("random_state")
-    rng = np.random.default_rng(seed)
-    indices = rng.choice(n_train, size=target, replace=False)
-    LOGGER.info(
-        "Using %d/%d samples from '%s' for tuning (sample_fraction=%s, max_samples=%s)",
-        target,
-        n_train,
-        dataset_name,
-        fraction if fraction is not None else "full",
-        max_count if max_count is not None else "full",
-    )
-    return X_train[indices], None if y_train is None else y_train[indices]
-
-
-def _ensure_dataset_metadata(
-    dataset_dir: Path,
-    dataset_name: str,
-    dataset_type: str,
-    feature_names: List[str],
-) -> None:
-    meta_path = dataset_dir / "metadata.json"
-    if meta_path.exists():
-        return
-    payload = {
-        "dataset": dataset_name,
-        "dataset_type": dataset_type,
-        "n_features": len(feature_names),
-        "feature_names": feature_names,
-        "generated_at": datetime.utcnow().isoformat(),
-    }
-    meta_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
-
-
-def _checkpoint_explanations(
-    *,
-    method_label: str,
-    path: Path,
-    dataset_mapping: Dict[int, Tuple[int, Dict[str, Any]]],
-    feature_names: List[str],
-    y_pred,
-    y_true,
-    y_proba,
-) -> None:
-    records: List[Dict[str, Any]] = []
-    for dataset_idx in sorted(dataset_mapping.keys()):
-        _, explanation = dataset_mapping[dataset_idx]
-        metadata = dict(explanation.get("metadata") or {})
-        metadata.pop("dataset_index", None)
-        predicted_label = _safe_scalar(_value_at(y_pred, dataset_idx))
-        true_label = _safe_scalar(_value_at(y_true, dataset_idx))
-        proba_raw = _value_at(y_proba, dataset_idx)
-        predicted_proba = (
-            None if proba_raw is None else np.asarray(proba_raw).tolist()
-        )
-        correct_prediction = (
-            true_label is not None and predicted_label == true_label
-        )
-        record: Dict[str, Any] = {
-            "instance_id": dataset_idx,
-            "dataset_index": dataset_idx,
-            "true_label": true_label,
-            "prediction": predicted_label,
-            "prediction_proba": predicted_proba,
-            "correct_prediction": correct_prediction,
-            "feature_importance": np.asarray(
-                explanation.get("attributions", [])
-            ).tolist(),
-            "metadata": to_serializable(metadata) if metadata else {},
-        }
-        gen_time = explanation.get("generation_time")
-        if gen_time is not None:
-            record["generation_time"] = float(gen_time)
-        records.append(record)
-    payload = {
-        "metadata": {
-            "feature_names": feature_names,
-            "n_features": len(feature_names),
-        },
-        "records": records,
-    }
-    serialized = json.dumps(to_serializable(payload), indent=2)
-    path.write_text(serialized, encoding="utf-8")
-    LOGGER.debug(
-        "Checkpointed %d explanations for %s at %s",
-        len(records),
-        method_label,
-        path,
-    )
-
-
-def _write_completion_flag(
-    *,
-    status_path: Path,
-    explainer_key: str,
-    method_label: str,
-    dataset_name: str,
-    model_name: str,
-    detail_path: Path,
-    metrics_path: Optional[Path],
-    dataset_indices: Iterable[int],
-) -> None:
-    payload = {
-        "explainer": explainer_key,
-        "method_label": method_label,
-        "dataset": dataset_name,
-        "model": model_name,
-        "detail_path": str(detail_path),
-        "metrics_path": str(metrics_path) if metrics_path else None,
-        "dataset_indices": [int(idx) for idx in dataset_indices],
-        "completed_at": datetime.utcnow().isoformat(),
-    }
-    status_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
-
-
-def _load_completion_flag(path: Path) -> Optional[Dict[str, Any]]:
-    if not path.exists():
-        return None
-    try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except Exception as exc:  # pragma: no cover - defensive
-        LOGGER.warning("Failed to read completion flag from %s: %s", path, exc)
-        return None
-
-
-def _load_cached_explanations(file_path: Path, method_label: str) -> Optional[Dict[str, Any]]:
-    if not file_path.exists():
-        return None
-    try:
-        raw = json.loads(file_path.read_text(encoding="utf-8"))
-    except Exception as exc:  # pragma: no cover - defensive logging
-        LOGGER.warning("Failed to load cached explanations from %s: %s", file_path, exc)
-        return None
-
-    feature_names = None
-    if isinstance(raw, dict):
-        raw_records = raw.get("records") or raw.get("explanations") or []
-        meta_block = raw.get("metadata") or {}
-        feature_names = meta_block.get("feature_names") or raw.get("feature_names")
-    else:
-        raw_records = raw
-
-    explanations: List[Dict[str, Any]] = []
-    for record in raw_records:
-        metadata = dict(record.get("metadata") or {})
-        dataset_idx = record.get("dataset_index")
-        if dataset_idx is not None:
-            metadata.setdefault("dataset_index", dataset_idx)
-        explanation_entry: Dict[str, Any] = {
-            "method": method_label,
-            "attributions": record.get("feature_importance") or [],
-            "metadata": metadata,
-            "metadata_key": dataset_idx if dataset_idx is not None else record.get("instance_id"),
-        }
-        gen_time = record.get("generation_time")
-        if gen_time is not None:
-            explanation_entry["generation_time"] = float(gen_time)
-        explanations.append(explanation_entry)
-
-    return {
-        "method": method_label,
-        "explanations": explanations,
-        "n_explanations": len(explanations),
-        "info": {
-            "source": "cached_file",
-            "path": str(file_path),
-            "feature_names": feature_names,
-        },
-    }
-
-
-def _load_cached_metrics(
-    file_path: Path, method_label: str
-) -> Tuple[Dict[int, Dict[str, float]], Dict[str, float]]:
-    if not file_path.exists():
-        return {}, {}
-    try:
-        payload = json.loads(file_path.read_text(encoding="utf-8"))
-    except Exception as exc:  # pragma: no cover - defensive logging
-        LOGGER.warning("Failed to load cached metrics from %s: %s", file_path, exc)
-        return {}, {}
-    file_method = payload.get("method", method_label)
-    if file_method != method_label:
-        LOGGER.warning(
-            "Cached metrics file %s method=%s does not match expected label %s",
-            file_path,
-            file_method,
-            method_label,
-        )
-    instances: Dict[int, Dict[str, float]] = {}
-    for record in payload.get("instances", []):
-        dataset_idx = record.get("dataset_index", record.get("instance_id"))
-        if dataset_idx is None:
-            continue
-        try:
-            dataset_idx_int = int(dataset_idx)
-        except (TypeError, ValueError):
-            continue
-        metrics = _coerce_metric_dict(record.get("metrics") or {})
-        if metrics:
-            instances[dataset_idx_int] = metrics
-    batch_metrics = _coerce_metric_dict(payload.get("batch_metrics") or {})
-    return instances, batch_metrics
-
-
-def _evaluate_metrics_for_method(
-    *,
-    metric_objs: Dict[str, Any],
-    metric_caps: Dict[str, Dict[str, Any]],
-    explainer,
-    expl_results: Dict[str, Any],
-    dataset_mapping: Dict[int, Tuple[int, Dict[str, Any]]],
-    model,
-    dataset,
-    method_label: str,
-    log_progress: bool,
-) -> Tuple[Dict[str, float], Dict[int, Dict[str, float]]]:
-    batch_metrics: Dict[str, float] = {}
-    instance_metrics: Dict[int, Dict[str, float]] = {}
-    if not metric_objs:
-        return batch_metrics, instance_metrics
-
-    for metric_name, metric in metric_objs.items():
-        caps = metric_caps[metric_name]
-        if caps["per_instance"]:
-            if log_progress:
-                LOGGER.info(
-                    "Running %s metric (per-instance) for %s", metric_name, method_label
-                )
-            for dataset_idx, (local_idx, _) in dataset_mapping.items():
-                payload = dict(expl_results)
-                payload["current_index"] = local_idx
-                out = metric.evaluate(
-                    model=model,
-                    explanation_results=payload,
-                    dataset=dataset,
-                    explainer=explainer,
-                )
-                values = _coerce_metric_dict(out)
-                if not values:
-                    continue
-                instance_entry = instance_metrics.setdefault(int(dataset_idx), {})
-                instance_entry.update(values)
-            continue
-
-        if not caps["requires_full_batch"]:
-            continue
-        if log_progress:
-            LOGGER.info("Running %s metric (batch) for %s", metric_name, method_label)
-        out = metric.evaluate(
-            model=model,
-            explanation_results=expl_results,
-            dataset=dataset,
-            explainer=explainer,
-        )
-        batch_metrics.update(_coerce_metric_dict(out))
-
-    return batch_metrics, instance_metrics
-
-
-def _extract_metric_parameters(metric: Any) -> Dict[str, Any]:
-    params: Dict[str, Any] = {}
-    attr_dict = getattr(metric, "__dict__", {})
-    for key, value in attr_dict.items():
-        if key.startswith("_"):
-            continue
-        if _is_jsonable(value):
-            params[key] = value
-    return params
-
-
-def _is_jsonable(value: Any) -> bool:
-    if value is None or isinstance(value, (str, int, float, bool)):
-        return True
-    if isinstance(value, (list, tuple)):
-        return all(_is_jsonable(v) for v in value)
-    if isinstance(value, dict):
-        return all(isinstance(k, str) for k in value.keys()) and all(
-            _is_jsonable(v) for v in value.values()
-        )
-    return False
-
-
-def _write_metric_results(
-    *,
-    metrics_dir: Path,
-    dataset_name: str,
-    model_name: str,
-    method_label: str,
-    instances: List[Dict[str, Any]],
-    batch_metrics: Dict[str, float],
-    metric_metadata: Dict[str, Dict[str, Any]],
-) -> Optional[str]:
-    if not instances and not batch_metrics:
-        return None
-    payload = {
-        "dataset": dataset_name,
-        "model": model_name,
-        "method": method_label,
-        "generated_at": datetime.utcnow().isoformat(),
-        "metric_metadata": metric_metadata,
-        "instances": instances,
-        "batch_metrics": batch_metrics,
-    }
-    file_path = metrics_dir / f"{method_label}_metrics.json"
-    with file_path.open("w", encoding="utf-8") as handle:
-        json.dump(to_serializable(payload), handle, indent=2)
-    return str(file_path)
-
-
-def _coerce_metric_dict(values: Optional[Dict[str, Any]]) -> Dict[str, float]:
-    # Sanitize metric output to ensure all values are floats.
-    # If there are nones or non-coercible values, they are skipped.
-    if not values:
-        return {}
-    coerced: Dict[str, float] = {}
-    for key, value in values.items():
-        if value is None:
-            continue
-        try:
-            coerced[key] = float(value)
-        except (TypeError, ValueError):
-            continue
-    return coerced
-
-
-def _value_at(sequence, index: int):
-    if sequence is None or index < 0:
-        return None
-    try:
-        length = len(sequence)
-    except TypeError:
-        return None
-    if index >= length:
-        return None
-    try:
-        return sequence[index]
-    except (IndexError, TypeError):
-        return None
-
-
-def _safe_scalar(value: Any) -> Any:
-    if isinstance(value, np.ndarray):
-        if value.size == 0:
-            return None
-        value = value.ravel()[0]
-    if isinstance(value, np.generic):
-        return value.item()
-    return value

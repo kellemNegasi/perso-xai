@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import json
 import logging
+import ast
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -222,10 +223,9 @@ class HyperparameterTuner:
 
         # Mirror benchmarking customization hooks so that tabular MLPs stay lightweight.
         if dataset_type == "tabular" and model_name in {"mlp", "mlp_classifier"}:
+            raw_sizes = grid.get("hidden_layer_sizes", [[50], [100], [50, 50]])
             return {
-                "hidden_layer_sizes": grid.get(
-                    "hidden_layer_sizes", [[50], [100], [50, 50]]
-                ),
+                "hidden_layer_sizes": self._normalize_hidden_layer_sizes(raw_sizes),
                 "activation": grid.get("activation", ["relu", "tanh"]),
                 "alpha": grid.get("alpha", [0.0001, 0.001, 0.01]),
                 "max_iter": grid.get("max_iter", [500, 1000]),
@@ -247,6 +247,30 @@ class HyperparameterTuner:
         if alias and alias in self.grids:
             return self.grids[alias]
         return {}
+
+    @staticmethod
+    def _normalize_hidden_layer_sizes(values: List[Any]) -> List[Any]:
+        """
+        Ensure hidden_layer_sizes values are tuples/ints even when config strings slip through.
+        """
+        normalized: List[Any] = []
+        for raw in values:
+            parsed = raw
+            if isinstance(raw, str):
+                try:
+                    parsed = ast.literal_eval(raw)
+                except Exception:
+                    parsed = raw
+            if isinstance(parsed, int):
+                normalized.append(int(parsed))
+            elif isinstance(parsed, (list, tuple)):
+                normalized.append(tuple(int(v) for v in parsed))
+            else:
+                raise ValueError(
+                    "hidden_layer_sizes entries must be ints or sequences "
+                    f"(received {raw!r} of type {type(raw).__name__})."
+                )
+        return normalized
 
     def _run_grid_search(
         self,

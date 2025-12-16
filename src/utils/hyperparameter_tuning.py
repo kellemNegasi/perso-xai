@@ -301,6 +301,8 @@ class HyperparameterTuner:
         if optuna is None:  # pragma: no cover - defensive, handled earlier
             raise RuntimeError("Optuna not available")
 
+        safe_space, choice_maps = self._make_optuna_safe_choices(search_space)
+
         cv = int(self.settings["cv_folds"])
         scoring = self.settings.get("scoring")
         n_jobs = int(self.settings.get("n_jobs", -1))
@@ -310,10 +312,12 @@ class HyperparameterTuner:
         def objective(trial: "optuna.Trial") -> float:
             estimator = build_estimator_from_spec(spec)
             params: Dict[str, Any] = {}
-            for key, values in search_space.items():
+            for key, values in safe_space.items():
                 if not values:
                     continue
                 params[key] = trial.suggest_categorical(key, list(values))
+                if key in choice_maps:
+                    params[key] = choice_maps[key][params[key]]
             if params:
                 estimator.set_params(**params)
             scores = cross_val_score(
@@ -349,6 +353,30 @@ class HyperparameterTuner:
             for trial in study.trials
         ]
         return best_params, float(study.best_value), trials_metadata
+
+    @staticmethod
+    def _make_optuna_safe_choices(
+        search_space: Dict[str, List[Any]]
+    ) -> Tuple[Dict[str, List[Any]], Dict[str, Dict[Any, Any]]]:
+        """
+        Convert choices to Optuna-safe types (None/bool/int/float/str) while retaining originals.
+        """
+        safe_space: Dict[str, List[Any]] = {}
+        remap: Dict[str, Dict[Any, Any]] = {}
+        for key, values in search_space.items():
+            safe_values: List[Any] = []
+            value_map: Dict[Any, Any] = {}
+            for val in values:
+                if isinstance(val, (type(None), bool, int, float, str)):
+                    safe_values.append(val)
+                    continue
+                label = json.dumps(val, sort_keys=True)
+                safe_values.append(label)
+                value_map[label] = val
+            safe_space[key] = safe_values
+            if value_map:
+                remap[key] = value_map
+        return safe_space, remap
 
 
 def _json_converter(obj: Any) -> Any:

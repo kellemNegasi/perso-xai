@@ -7,6 +7,7 @@ from collections import Counter
 from typing import Dict, Iterable, List, Mapping, Sequence
 
 import numpy as np
+from scipy.stats import kendalltau
 import pandas as pd
 
 LOGGER = logging.getLogger(__name__)
@@ -115,50 +116,44 @@ def compute_rank_correlations(
     gt_rank_map: Mapping[str, int],
 ) -> Dict[str, float]:
     """Compute Spearman and Kendall correlations on the union of top-k items."""
-    pred_ranks: List[int] = []
-    gt_ranks: List[int] = []
-    for variant in union_items:
-        if variant not in pred_rank_map or variant not in gt_rank_map:
-            continue
-        # use 1-based ranks for traditional formulas
-        pred_ranks.append(pred_rank_map[variant] + 1)
-        gt_ranks.append(gt_rank_map[variant] + 1)
-    n = len(pred_ranks)
-    if n < 2:
+    overlap = [item for item in union_items if item in pred_rank_map and item in gt_rank_map]
+    if len(overlap) < 2:
         return {"spearman": 0.0, "kendall": 0.0}
 
-    spearman = _spearman_rank_correlation(pred_ranks, gt_ranks)
-    kendall = _kendall_tau(pred_ranks, gt_ranks)
+    pred_positions = pd.Series(
+        [pred_rank_map[item] for item in overlap],
+        index=overlap,
+        dtype=float,
+    )
+    gt_positions = pd.Series(
+        [gt_rank_map[item] for item in overlap],
+        index=overlap,
+        dtype=float,
+    )
+
+    pred_rank_avg = pred_positions.rank(method="average")
+    gt_rank_avg = gt_positions.rank(method="average")
+    spearman = _spearman_from_rank_vectors(pred_rank_avg.to_numpy(), gt_rank_avg.to_numpy())
+
+    pred_dense = pred_positions.rank(method="dense")
+    gt_dense = gt_positions.rank(method="dense")
+    kendall = _kendall_tau(pred_dense.to_numpy(), gt_dense.to_numpy())
     return {"spearman": spearman, "kendall": kendall}
 
 
-def _spearman_rank_correlation(r1: Sequence[int], r2: Sequence[int]) -> float:
-    n = len(r1)
-    if n < 2:
+def _spearman_from_rank_vectors(r1: np.ndarray, r2: np.ndarray) -> float:
+    if len(r1) < 2:
         return 0.0
-    diffs = [(a - b) for a, b in zip(r1, r2)]
-    numerator = 6 * sum(diff * diff for diff in diffs)
-    denominator = n * (n * n - 1)
-    return 1 - numerator / denominator if denominator else 0.0
+    corr = np.corrcoef(r1, r2)[0, 1]
+    if np.isnan(corr):
+        return 0.0
+    return float(corr)
 
 
-def _kendall_tau(r1: Sequence[int], r2: Sequence[int]) -> float:
-    n = len(r1)
-    if n < 2:
+def _kendall_tau(r1: np.ndarray, r2: np.ndarray) -> float:
+    if len(r1) < 2:
         return 0.0
-    concordant = 0
-    discordant = 0
-    for i in range(n):
-        for j in range(i + 1, n):
-            sign1 = r1[i] - r1[j]
-            sign2 = r2[i] - r2[j]
-            prod = sign1 * sign2
-            if prod > 0:
-                concordant += 1
-            elif prod < 0:
-                discordant += 1
-            # ties (prod == 0) are ignored for simplicity
-    total_pairs = concordant + discordant
-    if total_pairs == 0:
+    tau, _ = kendalltau(r1, r2, method="auto")
+    if np.isnan(tau):
         return 0.0
-    return (concordant - discordant) / total_pairs
+    return float(tau)

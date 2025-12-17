@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Sequence
 
 from .config import ExperimentConfig
+from .models import LinearSVCConfig
 from .pipeline import DEFAULT_PROCESSED_DIR, DEFAULT_RESULTS_ROOT, run_linear_svc_experiment
 
 
@@ -68,6 +69,18 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         nargs="+",
         help="Space-separated list of k values for evaluation (default: 1 3 5).",
     )
+    parser.add_argument(
+        "--svc-C",
+        type=float,
+        default=1.0,
+        help="Regularization strength for LinearSVC (default: 1.0).",
+    )
+    parser.add_argument(
+        "--svc-max-iter",
+        type=int,
+        default=5000,
+        help="Maximum optimization iterations for LinearSVC (default: 5000).",
+    )
     return parser.parse_args(argv)
 
 
@@ -87,12 +100,18 @@ def main(argv: Sequence[str] | None = None) -> None:
         random_state=args.random_state,
         top_k=tuple(top_k),
     )
+    model_config = LinearSVCConfig(
+        C=args.svc_C,
+        max_iter=args.svc_max_iter,
+        random_state=args.random_state,
+    )
     metrics = run_linear_svc_experiment(
         encoded_path=encoded_path,
         pair_labels_dir=pair_labels_dir,
         persona=args.persona,
         output_dir=args.output_dir,
         experiment_config=experiment_config,
+        model_config=model_config,
     )
     print(json.dumps(metrics, indent=2))
 

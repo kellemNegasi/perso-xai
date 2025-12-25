@@ -36,6 +36,10 @@ Long-running sweeps can be resumed safely: add `--skip-existing-experiments` to 
 
 Set `experiment.logging.level` within an explainer’s config entry to throttle noisy INFO logs (e.g., SHAP now defaults to `WARNING`). Combine with `experiment.logging.progress` if you still want periodic progress updates without the full verbose output.
 
+## AutoXAI Baseline (LIME/SHAP)
+
+To compare an AutoXAI-style “scalarized objective” recommender against HC-XAI without rerunning explainers, see `baseline/README.md`. The baseline consumes cached `metrics_results/*_metrics.json` artifacts and produces a ranking over LIME/SHAP variants plus an optional comparison against HC-XAI pair-label parquet files.
+
 ### SHAP (`shap`)
 Hybrid Tree/Kernel SHAP implementation [(`src/explainers/shap_explainer.py`)](src/explainers/shap_explainer.py). Tree models use `shap.TreeExplainer`; other models fall back to Kernel SHAP with a randomly sampled background set. Parameter: `background_sample_size` (default 100) controls how many training points form the background distribution for Kernel SHAP; larger values reduce variance but increase runtime.
 

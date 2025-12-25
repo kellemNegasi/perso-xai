@@ -2,12 +2,17 @@
 
 This baseline reproduces AutoXAI’s *selection + scalarization* idea, but runs it **on top of cached HC-XAI per-instance metrics** so we can compare recommendation rankings without rerunning the full HC-XAI explainer pipeline.
 
-Implementation lives in `src/baseline/autoxai.py`.
+Entry point lives in `src/baseline/autoxai.py`, with implementation split across:
+- `src/baseline/autoxai_runner.py` (pipeline)
+- `src/baseline/autoxai_scoring.py` (scoring/scaling)
+- `src/baseline/autoxai_hpo.py` (HPO schedules/selection)
+- `src/baseline/autoxai_evaluation.py` (pair-label + top-k evaluation)
+- `src/baseline/autoxai_objectives.py` / `src/baseline/autoxai_config.py` / `src/baseline/autoxai_data.py` / `src/baseline/autoxai_utils.py`
 
 ## What It Does
 
 - Loads `*_metrics.json` files under a HC-XAI run directory, e.g. `results/full_run_dec8/metrics_results/<dataset>/<model>/lime_metrics.json`.
-- Builds candidates keyed by `(dataset_index, method_variant)` for the requested `--methods` (typically `lime` and `shap`).
+- Builds candidates keyed by `(dataset_index, method_variant)` for the requested `--methods` (e.g. `lime`, `shap`, `integrated_gradients`, `causal_shap`).
 - Computes an AutoXAI-style objective (by default for `--persona autoxai`):
   - `robustness`: minimize `relative_input_stability`
   - `fidelity`: minimize `infidelity`
@@ -93,3 +98,36 @@ If you have pair-label parquet files for a persona, you can pass them directly:
 
 The all-runs script auto-adds `--pair-labels` for `layperson`/`regulator` when the file exists.
 
+## Holdout Evaluation (Match HC-XAI Test Split)
+
+To evaluate AutoXAI on the **same held-out instances** used by HC-XAI preference-learning, pass the split file:
+
+- `--hc-xai-split-json results/full_run_dec8/preference_learning/<persona>/<dataset>__<model>_pareto/processed/splits.json`
+- `--split-set test` (default) to restrict scoring to HC-XAI's test instances.
+
+When `--pair-labels` is present, AutoXAI also emits an HC-XAI-style `top_k_evaluation` report:
+
+- `--top-k 3 5` (default: `3 5`)
+
+Convenience script (recommended):
+
+```bash
+src/baseline/run_autoxai_holdout_eval.sh \
+  --results-root results/full_run_dec8 \
+  --dataset open_compas \
+  --model mlp_classifier \
+  --persona layperson \
+  --split-set test \
+  --top-k "3 5"
+```
+
+To run the same holdout evaluation over **all** dataset/model pairs for a persona:
+
+```bash
+bash src/baseline/run_autoxai_holdout_eval_all.sh \
+  --results-root results/full_run_dec8 \
+  --persona layperson \
+  --split-set test \
+  --top-k "3 5" \
+  --jobs 4
+```

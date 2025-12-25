@@ -33,7 +33,9 @@ def ensure_dataset_metadata(
         "feature_names": feature_names,
         "generated_at": datetime.utcnow().isoformat(),
     }
-    meta_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    tmp_path = meta_path.with_suffix(".json.tmp")
+    tmp_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    tmp_path.replace(meta_path)
 
 
 def checkpoint_explanations(

@@ -3,11 +3,11 @@
 
 explainers:
   lime:
-    lime_num_samples: [100, 200]
+    lime_num_samples: [50, 100, 200]
     lime_kernel_width: [1.5, 2.0, 3.0]
   shap:
     background_sample_size: [50, 100, 150]
   integrated_gradients:
-    ig_steps: [40, 60]
+    ig_steps: [20, 40, 60]
   causal_shap:
     causal_shap_coalitions: [20, 30, 40]

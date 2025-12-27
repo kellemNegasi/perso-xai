@@ -12,8 +12,6 @@ from .autoxai_evaluation import (
 )
 from .autoxai_hpo import run_hpo, schedule_autoxai_trials
 from .autoxai_scoring import (
-    _fit_trial_scalers_from_history,
-    _score_variant_mean_terms,
     compute_mean_score_by_variant,
     compute_scores,
     compute_variant_term_means,
@@ -133,48 +131,41 @@ def run(
             trial_history_for_scaling=global_history,
         )
 
-        term_names = [term.name for term in objective]
-        final_scalers = _fit_trial_scalers_from_history(
-            trial_history=global_history,
-            variant_term_means=variant_term_means,
-            term_names=term_names,
-            scaling=scaling,
-        )
+        # Compute trial scores sequentially (AutoXAI-like), so scaling is fit on the
+        # trial history observed so far (plus the current trial).
+        from .autoxai_scoring import _trial_objective_value  # local import to keep API surface small
 
-        score_lookup: Dict[str, float] = {}
-        for variant in evaluated_variants | set(defaults.values()):
-            maybe = _score_variant_mean_terms(
-                variant=variant,
+        history_prefix: List[str] = []
+        global_trial_scores: List[float] = []
+        for variant in global_history:
+            score = _trial_objective_value(
+                history=history_prefix,
+                candidate=variant,
                 variant_term_means=variant_term_means,
-                term_scalers=final_scalers,
                 objective=objective,
                 scaling=scaling,
             )
-            if maybe is not None:
-                score_lookup[variant] = maybe
+            global_trial_scores.append(score if score is not None else float("-inf"))
+            history_prefix.append(variant)
 
         for method in methods:
             default_variant = defaults.get(method)
-            default_score = score_lookup.get(default_variant) if default_variant else None
-            method_trials = trials_by_method.get(method, [])
             trials: List[HPOTrial] = []
-            for variant in method_trials:
-                trials.append(
-                    HPOTrial(
-                        method=method,
-                        method_variant=variant,
-                        mean_score=score_lookup.get(variant, float("-inf")),
-                    )
-                )
+            default_score: Optional[float] = None
+            for variant, score in zip(global_history, global_trial_scores):
+                if variant_to_method.get(variant) != method:
+                    continue
+                if default_variant is not None and variant == default_variant and default_score is None:
+                    default_score = score
+                trials.append(HPOTrial(method=method, method_variant=variant, mean_score=score))
             if not trials:
                 raise ValueError(f"No HPO trials scheduled for method {method!r}.")
             best_trial = max(trials, key=lambda trial: trial.mean_score)
-            epochs_used = len(method_trials) if hpo_mode == "grid" else hpo_epochs
             hpo_results[method] = HPOResult(
                 method=method,
                 mode=hpo_mode,
                 seed=hpo_seed,
-                epochs=epochs_used,
+                epochs=len(trials),
                 default_variant=default_variant,
                 default_mean_score=default_score,
                 trials=trials,
@@ -278,4 +269,3 @@ def run(
         ),
         "variant_hyperparameters": variant_hparams_by_method,
     }
-

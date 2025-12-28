@@ -35,6 +35,7 @@ except Exception:  # pragma: no cover - defensive import
 from src.datasets.adapters import LoaderDatasetAdapter
 from src.datasets.tabular import TabularDataset
 from src.orchestrators.registry import DatasetRegistry, ExplainerRegistry
+from src.utils.landmarking import compute_landmarking_features
 
 DEFAULT_RESULTS_ROOT = Path("results") / "full_run_dec8"
 DEFAULT_METADATA_DIR = DEFAULT_RESULTS_ROOT / "metadata"
@@ -143,6 +144,10 @@ def build_dataset_metadata(
     std_cat_entropy_values: Dict[str, float] = {}
     mean_top_freq_values: Dict[str, float] = {}
     max_top_freq_values: Dict[str, float] = {}
+    landmark_knn1_values: Dict[str, float] = {}
+    landmark_nb_values: Dict[str, float] = {}
+    landmark_stump_values: Dict[str, float] = {}
+    landmark_logreg_values: Dict[str, float] = {}
 
     for dataset_id, dataset_name in enumerate(dataset_names):
         spec = registry.get(dataset_name)
@@ -172,6 +177,7 @@ def build_dataset_metadata(
         high_stakes = detect_high_stakes_domain(dataset_name, spec)
         numeric_stats = compute_numeric_feature_statistics(raw_feature_frame, dataset)
         categorical_stats = compute_categorical_feature_statistics(raw_feature_frame)
+        landmarking_stats = compute_landmarking_features(dataset)
 
         record = {
             "dataset_id": dataset_id,
@@ -185,6 +191,7 @@ def build_dataset_metadata(
             "high_stakes_domain": high_stakes,
             **numeric_stats,
             **categorical_stats,
+            **landmarking_stats,
         }
         if openml_meta and openml_meta.get("data_id"):
             record["openml_data_id"] = openml_meta["data_id"]
@@ -208,6 +215,10 @@ def build_dataset_metadata(
         std_cat_entropy_values[dataset_name] = categorical_stats["std_cat_entropy"]
         mean_top_freq_values[dataset_name] = categorical_stats["mean_top_freq"]
         max_top_freq_values[dataset_name] = categorical_stats["max_top_freq"]
+        landmark_knn1_values[dataset_name] = landmarking_stats["landmark_acc_knn1"]
+        landmark_nb_values[dataset_name] = landmarking_stats["landmark_acc_gaussian_nb"]
+        landmark_stump_values[dataset_name] = landmarking_stats["landmark_acc_decision_stump"]
+        landmark_logreg_values[dataset_name] = landmarking_stats["landmark_acc_logreg"]
 
     log_stats, log_feature_z = compute_z_scores(log_feature_values)
     entropy_stats, entropy_z = compute_z_scores(entropy_values)
@@ -231,6 +242,10 @@ def build_dataset_metadata(
     std_cat_entropy_stats, std_cat_entropy_z = compute_z_scores(std_cat_entropy_values)
     mean_top_freq_stats, mean_top_freq_z = compute_z_scores(mean_top_freq_values)
     max_top_freq_stats, max_top_freq_z = compute_z_scores(max_top_freq_values)
+    landmark_knn1_stats, landmark_knn1_z = compute_z_scores(landmark_knn1_values)
+    landmark_nb_stats, landmark_nb_z = compute_z_scores(landmark_nb_values)
+    landmark_stump_stats, landmark_stump_z = compute_z_scores(landmark_stump_values)
+    landmark_logreg_stats, landmark_logreg_z = compute_z_scores(landmark_logreg_values)
 
     for dataset_name, record in dataset_records.items():
         record["log_feature_count_z"] = log_feature_z.get(dataset_name, 0.0)
@@ -255,6 +270,10 @@ def build_dataset_metadata(
         record["std_cat_entropy_z"] = std_cat_entropy_z.get(dataset_name, 0.0)
         record["mean_top_freq_z"] = mean_top_freq_z.get(dataset_name, 0.0)
         record["max_top_freq_z"] = max_top_freq_z.get(dataset_name, 0.0)
+        record["landmark_acc_knn1_z"] = landmark_knn1_z.get(dataset_name, 0.0)
+        record["landmark_acc_gaussian_nb_z"] = landmark_nb_z.get(dataset_name, 0.0)
+        record["landmark_acc_decision_stump_z"] = landmark_stump_z.get(dataset_name, 0.0)
+        record["landmark_acc_logreg_z"] = landmark_logreg_z.get(dataset_name, 0.0)
 
     payload = {
         "generated_at": datetime.utcnow().isoformat(),
@@ -282,6 +301,10 @@ def build_dataset_metadata(
             "std_cat_entropy": std_cat_entropy_stats,
             "mean_top_freq": mean_top_freq_stats,
             "max_top_freq": max_top_freq_stats,
+            "landmark_acc_knn1": landmark_knn1_stats,
+            "landmark_acc_gaussian_nb": landmark_nb_stats,
+            "landmark_acc_decision_stump": landmark_stump_stats,
+            "landmark_acc_logreg": landmark_logreg_stats,
         },
     }
 

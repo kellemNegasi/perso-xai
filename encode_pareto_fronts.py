@@ -54,6 +54,10 @@ DATASET_META_FIELDS = (
     "std_cat_entropy_z",
     "mean_top_freq_z",
     "max_top_freq_z",
+    "landmark_acc_knn1_z",
+    "landmark_acc_gaussian_nb_z",
+    "landmark_acc_decision_stump_z",
+    "landmark_acc_logreg_z",
 )
 
 EXPLAINER_META_FIELDS = (

@@ -12,7 +12,7 @@ from .models import LinearSVCConfig
 from .pipeline import run_persona_linear_svc_simulation
 
 DEFAULT_RESULTS_ROOT = Path("results") / "full_run_dec8"
-DEFAULT_ENCODED_DIR = DEFAULT_RESULTS_ROOT / "encoded_pareto_fronts"
+DEFAULT_ENCODED_DIR = DEFAULT_RESULTS_ROOT / "encoded_pareto_fronts" / "features_full_lm_stats"
 DEFAULT_OUTPUT_DIR = DEFAULT_RESULTS_ROOT / "preference_learning"
 DEFAULT_PERSONA_CONFIG_DIR = Path("src") / "preference_learning" / "configs"
 PERSONA_CONFIGS = {

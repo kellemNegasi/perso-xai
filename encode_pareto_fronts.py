@@ -26,7 +26,7 @@ import yaml
 DEFAULT_RESULTS_ROOT = Path("results") / "full_run_dec8"
 DEFAULT_PARETO_DIR = DEFAULT_RESULTS_ROOT / "pareto_fronts"
 DEFAULT_METADATA_DIR = DEFAULT_RESULTS_ROOT / "metadata"
-DEFAULT_OUTPUT_DIR = DEFAULT_RESULTS_ROOT / "encoded_pareto_fronts"
+DEFAULT_OUTPUT_DIR = DEFAULT_RESULTS_ROOT / "encoded_pareto_fronts" / "features_full_lm_stats"
 DEFAULT_HPARAM_CONFIG = Path("src") / "configs" / "explainer_hyperparameters.yml"
 
 DATASET_META_FIELDS = (

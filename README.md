@@ -8,20 +8,28 @@ Human Centered XAI (HC-XAI) is a framework for generating, evaluating, and perso
 2. Present the resulting local explanations to human participants so they can label or rank their preferred styles.  
 3. Use those interactions to fit a ranker that maps context (model, instance, user) to the explanation style most likely to satisfy that person.
 
-### Running Experiments
+## Preference-Learning Pipeline (metadata → encoding → meta-learning)
 
-The old exploratory notebooks now delegate to a reusable orchestrator so that scripted runs and notebooks share the same code path. To reproduce the JSON artifacts shown in `notebooks/notebooks/results_per_instance_*` simply call:
-
-```python
-from pathlib import Path
-from src.orchestrators.metrics_runner import run_experiment
-
-run_experiment(
-    "breast_cancer_lr_suite",
-    max_instances=10,
-    output_path=Path("notebooks/notebooks/results_per_instance_breast_cancer_lr_suite.json"),
-)
-```
+- **Generate metadata** (dataset/explainer stats, landmarking signals):
+  ```
+  python3 generate_dataset_metadata.py --output-dir results/full_run_dec8/metadata
+  ```
+- **Encode Pareto fronts** into tabular features (writes to timestamped subfolder):
+  ```
+  python3 encode_pareto_fronts.py \
+    --pareto-dir results/full_run_dec8/pareto_fronts \
+    --metadata-dir results/full_run_dec8/metadata \
+    --output-dir results/full_run_dec8/encoded_pareto_fronts/features_full_time_stamp
+  ```
+- **Run prefernce-learning experiments** across personas and all encoded files:
+  ```
+  python3 -m src.preference_learning.run_all \
+    --encoded-dir results/full_run_dec8/encoded_pareto_fronts/features_full_time_stamp \
+    --output-dir results/full_run_dec8/preference_learning_simulation \
+    --personas layperson regulator clinician \
+    --num-users 10
+  ```
+Adjust paths if your artifacts live elsewhere or you want parallel runs in different folders.
 
 The runner pulls the dataset/model/explainer/metric configs from `src/configs/*.yml`, instantiates everything, and attaches both per-instance and batch metrics using the capability metadata each evaluator now exposes.
 

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import logging
+import os
+import uuid
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
@@ -33,9 +35,21 @@ def ensure_dataset_metadata(
         "feature_names": feature_names,
         "generated_at": datetime.utcnow().isoformat(),
     }
-    tmp_path = meta_path.with_suffix(".json.tmp")
+    # Avoid races under multi-process job launches (e.g. HPC array jobs) by using a unique tmp name.
+    tmp_path = meta_path.with_name(f"{meta_path.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp")
     tmp_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
-    tmp_path.replace(meta_path)
+    try:
+        tmp_path.replace(meta_path)
+    except FileNotFoundError:
+        # Another process may have won the race and moved its tmp into place.
+        if meta_path.exists():
+            return
+        raise
+    finally:
+        try:
+            tmp_path.unlink()
+        except FileNotFoundError:
+            pass
 
 
 def checkpoint_explanations(

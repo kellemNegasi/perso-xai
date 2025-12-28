@@ -318,6 +318,13 @@ def run_experiment(
     y_pred = model.predict(X_eval)
     supports_proba = getattr(model, "supports_proba", hasattr(model, "predict_proba"))
     y_proba = model.predict_proba(X_eval) if supports_proba else None
+    if log_progress:
+        LOGGER.info(
+            "Progress enabled: %d explainers, %d metrics, %d evaluation instances",
+            len(explainer_names),
+            len(metric_names),
+            len(X_eval),
+        )
 
     metric_objs: Dict[str, Any] = {}
     metric_caps: Dict[str, Dict[str, Any]] = {}
@@ -384,12 +391,31 @@ def run_experiment(
     for name in explainer_names:
         for method_label, override in _expand_variants(name):
             explainer_variants.append((name, method_label, override))
+    total_explainers = len(explainer_names)
+    total_variants = len(explainer_variants)
+    if log_progress:
+        LOGGER.info(
+            "Progress: prepared %d explainers (%d total variants)",
+            total_explainers,
+            total_variants,
+        )
 
     method_artifacts: List[MethodArtifact] = []
     all_dataset_indices: Set[int] = set()
-    for expl_name in explainer_names:
+    for expl_index, expl_name in enumerate(explainer_names, start=1):
         variants = _expand_variants(expl_name)
         base_label = expl_name
+
+        if log_progress:
+            percent = 100.0 * expl_index / total_explainers if total_explainers else 100.0
+            LOGGER.info(
+                "[progress] Starting explainer %d/%d (%.1f%%): %s (%d variants)",
+                expl_index,
+                total_explainers,
+                percent,
+                expl_name,
+                len(variants),
+            )
 
         status_path = status_dir / f"{base_label}_status.json"
         status_info = load_completion_flag(status_path)
@@ -436,6 +462,13 @@ def run_experiment(
                 method_label,
                 model_name,
             )
+            if log_progress:
+                LOGGER.info(
+                    "[progress] Completed %s (%d/%d explainers) via cache reuse",
+                    base_label,
+                    expl_index,
+                    total_explainers,
+                )
             continue
 
         # Optional reuse of cached explanations to compute metrics without recomputation.
@@ -469,7 +502,15 @@ def run_experiment(
         combined_detail_path: Optional[Path] = None
         combined_metrics_path: Optional[Path] = None
 
-        for method_label, param_override in variants:
+        for variant_index, (method_label, param_override) in enumerate(variants, start=1):
+            if log_progress and len(variants) > 1:
+                LOGGER.info(
+                    "[progress] %s variant %d/%d (%.1f%%)",
+                    base_label,
+                    variant_index,
+                    len(variants),
+                    100.0 * variant_index / len(variants),
+                )
             # Gather explanations: reuse cached for this variant when available, otherwise compute.
             variant_explanations: List[Dict[str, Any]] = []
             if cached_variants:
@@ -616,6 +657,13 @@ def run_experiment(
             metrics_path=combined_metrics_path,
             dataset_indices=sorted(combined_dataset_indices),
         )
+        if log_progress:
+            LOGGER.info(
+                "[progress] Completed explainer %d/%d: %s",
+                expl_index,
+                total_explainers,
+                base_label,
+            )
 
     # Collect per-instance metrics and assemble the final output structure.
     explanation_metadata: Dict[str, Dict[int, Any]] = {}

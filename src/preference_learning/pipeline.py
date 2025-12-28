@@ -5,11 +5,14 @@ from __future__ import annotations
 import json
 from collections import defaultdict
 from pathlib import Path
-from typing import Dict, Iterable, Mapping, Sequence
+from typing import Any, Dict, Iterable, Mapping, Sequence, Tuple
 
 import numpy as np
 import pandas as pd
 from sklearn.model_selection import train_test_split
+
+from src.baseline.autoxai_objectives import default_objective_terms
+from src.baseline.autoxai_scoring import compute_scores
 
 from .config import ExperimentConfig
 from .data import (
@@ -111,9 +114,12 @@ def run_persona_linear_svc_simulation(
     test_ids = sorted(int(idx) for idx in test_ids)
 
     persona_config = load_persona_config(persona_config_path)
+    pareto_metrics, variant_to_method = _load_pareto_metrics_for_encoded(encoded_path)
+    autoxai_objective = default_objective_terms()
 
     per_user_summaries: list[dict] = []
     per_user_topk: list[Dict[str, Dict[str, float]]] = []
+    per_user_autoxai_topk: list[Dict[str, Dict[str, float]]] = []
     for user_idx in range(config.num_users):
         user = HierarchicalDirichletUser(
             persona_config,
@@ -151,6 +157,7 @@ def run_persona_linear_svc_simulation(
         model.fit(X_train, y_train)
 
         per_instance_topk: list[Dict[str, Dict[str, float]]] = []
+        per_instance_autoxai_topk: list[Dict[str, Dict[str, float]]] = []
         instances_evaluated = 0
         for instance_id in test_ids:
             instance_df = encoded_df.loc[encoded_df["instance_index"] == instance_id].copy()
@@ -169,8 +176,38 @@ def run_persona_linear_svc_simulation(
                 per_instance_topk.append(topk_metrics)
                 instances_evaluated += 1
 
+            autoxai_metrics = pareto_metrics.get(int(instance_id))
+            if autoxai_metrics:
+                variants_present = set(instance_df["method_variant"].astype(str).tolist())
+                instance_candidate_metrics = {
+                    variant: metrics
+                    for variant, metrics in autoxai_metrics.items()
+                    if variant in variants_present
+                }
+                instance_variant_to_method = {
+                    variant: variant_to_method.get(variant, "unknown") for variant in instance_candidate_metrics
+                }
+                if instance_candidate_metrics:
+                    scored = compute_scores(
+                        candidate_metrics={int(instance_id): instance_candidate_metrics},
+                        variant_to_method=instance_variant_to_method,
+                        objective=autoxai_objective,
+                        scaling="Std",
+                        scaling_scope="instance",
+                    )
+                    predicted = {
+                        score.method_variant: float(score.aggregated_score)
+                        for score in scored
+                        if score.dataset_index == int(instance_id)
+                    }
+                    autoxai_topk = evaluate_topk(predicted, ground_truth, k_values=config.top_k)
+                    if autoxai_topk:
+                        per_instance_autoxai_topk.append(autoxai_topk)
+
         user_topk_mean = _average_topk(per_instance_topk)
+        user_autoxai_topk_mean = _average_topk(per_instance_autoxai_topk)
         per_user_topk.append(user_topk_mean)
+        per_user_autoxai_topk.append(user_autoxai_topk_mean)
         per_user_summaries.append(
             {
                 "user_index": user_idx,
@@ -178,10 +215,14 @@ def run_persona_linear_svc_simulation(
                 "train_rows": int(len(X_train)),
                 "test_instances_evaluated": int(instances_evaluated),
                 "top_k_mean": user_topk_mean,
+                "svc_top_k_mean": user_topk_mean,
+                "autoxai_top_k_mean": user_autoxai_topk_mean,
             }
         )
 
     aggregate = _average_topk(per_user_topk)
+    aggregate_autoxai = _average_topk(per_user_autoxai_topk)
+    pareto_path = _default_pareto_path(encoded_path)
     result = {
         "dataset": dataset_name,
         "model": model_name,
@@ -196,10 +237,25 @@ def run_persona_linear_svc_simulation(
             "persona_seed": config.persona_seed,
             "label_seed": config.label_seed,
         },
+        "autoxai_baseline": {
+            "scaling": "Std",
+            "scaling_scope": "instance",
+            "objective": [
+                {
+                    "name": term.name,
+                    "metric_key": term.metric_key,
+                    "direction": term.direction,
+                    "weight": term.weight,
+                }
+                for term in autoxai_objective
+            ],
+            "pareto_json_used": str(pareto_path) if pareto_path.exists() else None,
+        },
         "train_instances": train_ids,
         "test_instances": test_ids,
         "per_user": per_user_summaries,
         "aggregate_top_k_mean": aggregate,
+        "aggregate_autoxai_top_k_mean": aggregate_autoxai,
     }
 
     if output_dir is not None:
@@ -234,6 +290,56 @@ def _average_topk(items: Sequence[Mapping[str, Mapping[str, object]]]) -> Dict[s
             denom = counts[k].get(name, 0)
             means[k][name] = total / denom if denom else 0.0
     return means
+
+
+def _default_pareto_path(encoded_path: Path) -> Path:
+    base = encoded_path.stem.replace("_encoded", "")
+    return DEFAULT_RESULTS_ROOT / "pareto_fronts" / f"{base}.json"
+
+
+
+def _load_pareto_metrics_for_encoded(encoded_path: Path) -> Tuple[Dict[int, Dict[str, Dict[str, float]]], Dict[str, str]]:
+    """
+    Load raw per-instance Pareto-front metrics for AutoXAI baseline scoring.
+
+    Returns:
+      - dataset_index -> method_variant -> metrics dict
+      - method_variant -> method
+    """
+    # We separetely load the raw Pareto metric for the AutoXAI baseline scoring.
+    # Since it doesn't the encoded features. We only need the method variants and their metrics.
+    path = _default_pareto_path(encoded_path)
+    if not path.exists():
+        return {}, {}
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    instances = payload.get("instances") or []
+    candidate_metrics: Dict[int, Dict[str, Dict[str, float]]] = {}
+    variant_to_method: Dict[str, str] = {}
+    for instance in instances:
+        dataset_index = instance.get("dataset_index")
+        if not isinstance(dataset_index, (int, float)):
+            continue
+        idx = int(dataset_index)
+        variants: Dict[str, Dict[str, float]] = {}
+        for entry in instance.get("pareto_front") or []:
+            variant = entry.get("method_variant")
+            method = entry.get("method")
+            metrics = entry.get("metrics") or {}
+            if not isinstance(variant, str) or not variant:
+                continue
+            if isinstance(method, str) and method:
+                variant_to_method[variant] = method
+            if not isinstance(metrics, Mapping):
+                continue
+            cleaned: Dict[str, float] = {}
+            for k, v in metrics.items():
+                if isinstance(k, str) and isinstance(v, (int, float)):
+                    cleaned[k] = float(v)
+            if cleaned:
+                variants[variant] = cleaned
+        if variants:
+            candidate_metrics[idx] = variants
+    return candidate_metrics, variant_to_method
 
 
 def _persist_processed_data(dataset: PairwisePreferenceData, experiment_dir: Path) -> None:

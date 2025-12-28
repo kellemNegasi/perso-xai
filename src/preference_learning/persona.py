@@ -156,7 +156,35 @@ def z_normalize_matrix(values: np.ndarray) -> np.ndarray:
 
 
 class HierarchicalDirichletUser:
-    """A single sampled user instance with fixed metric weights."""
+    """
+    Hierarchical persona that samples a two-level Dirichlet over metrics and then stays fixed.
+
+    Weight sampling
+    ---------------
+    - Metrics are partitioned into groups; group weights g are drawn from Dirichlet(alpha_group).
+    - Within each group, metric weights m are drawn from Dirichlet(alpha_metric).
+    - The final weight for a metric is proportional to g[group] * m[metric]; if a metric appears
+      in multiple groups, contributions are summed and then all metric weights are normalised.
+
+    Utility and preference
+    ----------------------
+    - Utility for an explanation e in context x: U(e|x) = sum_j w_j * z_j(metric_j(e, x)),
+      where z_j is the z-normalised (and sign-flipped if needed) value of metric j.
+    - Preference between candidates i and j with feature vectors phi_i, phi_j:
+        P(e_i ≻ e_j) = sigmoid( (w^T (phi_i - phi_j)) / tau ),
+      where phi_k = [z_1(metric_1(e_k)), ..., z_d(metric_d(e_k))] and tau is a temperature.
+
+    Parameters
+    ----------
+    config : PersonaConfig
+        Parsed persona definition containing group/metric alphas and optional tau override.
+    seed : int | None, optional
+        RNG seed for reproducible weight sampling; if None, uses a nondeterministic seed.
+    tau : float | None, optional
+        Preference temperature; overrides config.tau when provided (must be > 0).
+    negate_metrics : Iterable[str], optional
+        Metrics where lower is better; their values are negated before normalisation.
+    """
 
     def __init__(
         self,
@@ -239,6 +267,6 @@ class HierarchicalDirichletUser:
         return float(_sigmoid(np.asarray([delta / self.tau]))[0])
 
     def sample_preference(self, z_i: np.ndarray, z_j: np.ndarray) -> bool:
-        """Sample a Bernoulli preference label for (i over j)."""
-        p = self.preference_probability(z_i, z_j)
+        """Bernoulli sample: returns 1 with prob sigmoid(w·(z_i - z_j)/tau), else 0."""
+        p = self.preference_probability(z_i, z_j) # compute probability
         return bool(self._rng.random() < p)

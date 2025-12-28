@@ -251,7 +251,9 @@ class HyperparameterTuner:
     @staticmethod
     def _normalize_hidden_layer_sizes(values: List[Any]) -> List[Any]:
         """
-        Ensure hidden_layer_sizes values are tuples/ints even when config strings slip through.
+        Normalize grid entries so downstream estimators see only ints or tuples of ints.
+        Stringified configs (e.g., "[100, 50]" or "200") are parsed, converted, and validated
+        to fail fast on malformed inputs before hitting GridSearch/Optuna.
         """
         normalized: List[Any] = []
         for raw in values:
@@ -303,11 +305,12 @@ class HyperparameterTuner:
 
         safe_space, choice_maps = self._make_optuna_safe_choices(search_space)
 
-        cv = int(self.settings["cv_folds"])
-        scoring = self.settings.get("scoring")
-        n_jobs = int(self.settings.get("n_jobs", -1))
-        n_trials = int(self.settings.get("n_trials", 100))
-        timeout = self.settings.get("timeout")
+        settings = self.settings
+        cv = int(settings.get("cv_folds", self.DEFAULT_SETTINGS["cv_folds"]))
+        scoring = settings.get("scoring", self.DEFAULT_SETTINGS["scoring"])
+        n_jobs = int(settings.get("n_jobs", self.DEFAULT_SETTINGS["n_jobs"]))
+        n_trials = int(settings.get("n_trials", self.DEFAULT_SETTINGS["n_trials"]))
+        timeout = settings.get("timeout", self.DEFAULT_SETTINGS["timeout"])
 
         def objective(trial: "optuna.Trial") -> float:
             estimator = build_estimator_from_spec(spec)

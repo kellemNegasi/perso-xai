@@ -67,7 +67,11 @@ class ModelPersistence:
 
     @contextmanager
     def _boosted_recursion_limit(self):
-        """Temporarily raise the recursion limit for (de)serializing deep estimators."""
+        """
+        Temporarily raise the recursion limit for (de)serializing deep estimators.
+        Just to safely pickle/unpickle very deep estimators without hitting Python's default recursion cap
+        Sometimes it happens with deeply nested ensembles or pipelines.
+        """
         if self._recursion_limit is None:
             yield
             return

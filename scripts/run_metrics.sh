@@ -19,22 +19,23 @@ METRICS_DIR="$RESULTS_DIR/metrics_results"
 
 mkdir -p "$DETAIL_DIR" "$METRICS_DIR"
 
-for EXPERIMENT_SUITE in "${EXPERIMENT_SUITES[@]}"; do
-  cmd=(
-    python -m src.cli.main "$EXPERIMENT_SUITE"
-    --reuse-trained-models
-    --tune-models
-    --use-tuned-params
-    --write-detailed-explanations
-    --detailed-output-dir "$DETAIL_DIR"
-    --write-metric-results
-    --skip-existing-experiments
-    --skip-existing-methods
-    --metrics-output-dir "$METRICS_DIR"
-    --output-dir "$RESULTS_DIR"
-    --model-store-dir saved_models
-    --log-level INFO
-  )
+	for EXPERIMENT_SUITE in "${EXPERIMENT_SUITES[@]}"; do
+	  cmd=(
+	    python -m src.cli.main "$EXPERIMENT_SUITE"
+	    --reuse-trained-models
+	    --tune-models
+	    --use-tuned-params
+	    --write-detailed-explanations
+	    --detailed-output-dir "$DETAIL_DIR"
+	    --write-metric-results
+	    --skip-existing-experiments
+	    --skip-existing-methods
+	    --metrics-output-dir "$METRICS_DIR"
+	    --output-dir "$RESULTS_DIR"
+	    --experiment-results-subdir experiment_results
+	    --model-store-dir saved_models
+	    --log-level INFO
+	  )
 
   if [[ -n "$MODEL_OVERRIDE" ]]; then
     cmd+=(--model "$MODEL_OVERRIDE")

@@ -17,15 +17,16 @@ test-all:
 # Example: make run-experiments RUN_EXPERIMENTS="tabular_demo_suite" OUTPUT_DIR=results
 RUN_EXPERIMENTS ?= tabular_demo_suite
 MAX_INSTANCES ?=
-OUTPUT_DIR ?=
-MODEL ?=
-LOG_LEVEL ?=
-PRINT_SUMMARY ?=
+	OUTPUT_DIR ?=
+	EXPERIMENT_RESULTS_SUBDIR ?=
+	MODEL ?=
+	LOG_LEVEL ?=
+	PRINT_SUMMARY ?=
 OPENML_MAX_INSTANCES ?=
 OPENML_OUTPUT_DIR ?= openml_results
 
-run-experiments:
-	$(PYTHON) -m src.cli.main $(RUN_EXPERIMENTS) $(if $(MAX_INSTANCES),--max-instances $(MAX_INSTANCES),) $(if $(OUTPUT_DIR),--output-dir $(OUTPUT_DIR),) $(if $(MODEL),--model $(MODEL),) $(if $(LOG_LEVEL),--log-level $(LOG_LEVEL),) $(if $(PRINT_SUMMARY),--print-summary,)
+	run-experiments:
+		$(PYTHON) -m src.cli.main $(RUN_EXPERIMENTS) $(if $(MAX_INSTANCES),--max-instances $(MAX_INSTANCES),) $(if $(OUTPUT_DIR),--output-dir $(OUTPUT_DIR),) $(if $(EXPERIMENT_RESULTS_SUBDIR),--experiment-results-subdir $(EXPERIMENT_RESULTS_SUBDIR),) $(if $(MODEL),--model $(MODEL),) $(if $(LOG_LEVEL),--log-level $(LOG_LEVEL),) $(if $(PRINT_SUMMARY),--print-summary,)
 
 # Example: make tune-train TUNE_EXPERIMENT=openml_adult_suite TUNE_MODEL=random_forest
 TUNE_EXPERIMENT ?= openml_adult_suite

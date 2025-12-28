@@ -48,6 +48,15 @@ def build_parser() -> argparse.ArgumentParser:
         help=f"Directory where JSON results should be written (default: {DEFAULT_RESULTS_DIR}).",
     )
     parser.add_argument(
+        "--experiment-results-subdir",
+        type=Path,
+        default=None,
+        help=(
+            "Optional subdirectory (relative to --output-dir) where per-experiment summary JSON files "
+            "are written, e.g. 'experiment_results'. When omitted, writes directly under --output-dir."
+        ),
+    )
+    parser.add_argument(
         "--model",
         default=None,
         help="Optional model override when running a single experiment.",
@@ -226,6 +235,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     cli_args = list(argv) if argv is not None else sys.argv[1:]
     logger.debug("CLI arguments: %s", cli_args)
     output_dir = _ensure_output_dir(args.output_dir)
+    experiment_output_dir = output_dir
+    if output_dir is not None and args.experiment_results_subdir is not None:
+        subdir = args.experiment_results_subdir
+        experiment_output_dir = _ensure_output_dir(subdir if subdir.is_absolute() else output_dir / subdir)
     tuning_output_dir = _ensure_output_dir(args.tuning_output_dir)
     model_store_dir = _ensure_output_dir(args.model_store_dir)
     detailed_output_dir = (
@@ -251,7 +264,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             args.experiments,
             model_name=args.model,
             max_instances=args.max_instances,
-            output_dir=output_dir,
+            output_dir=experiment_output_dir,
             tune_models=args.tune_models,
             use_tuned_params=args.use_tuned_params,
             reuse_trained_models=args.reuse_trained_models,
@@ -272,7 +285,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         results = run_experiments(
             args.experiments,
             max_instances=args.max_instances,
-            output_dir=output_dir,
+            output_dir=experiment_output_dir,
             tune_models=args.tune_models,
             use_tuned_params=args.use_tuned_params,
             reuse_trained_models=args.reuse_trained_models,
@@ -291,9 +304,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
 
     logger.info(
-        "Completed %d experiment run(s). Results directory: %s",
+        "Completed %d experiment run(s). Experiment results directory: %s",
         len(results),
-        output_dir if output_dir else "<not written>",
+        experiment_output_dir if experiment_output_dir else "<not written>",
     )
 
     if args.print_summary:

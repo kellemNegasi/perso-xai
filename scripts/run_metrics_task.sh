@@ -21,22 +21,23 @@ METRICS_DIR="${RESULTS_DIR}/metrics_results"
 
 mkdir -p "${DETAIL_DIR}" "${METRICS_DIR}"
 
-cmd=(
-  python -m src.cli.main "${EXPERIMENT_SUITE}"
-  --reuse-trained-models
-  --tune-models
-  --use-tuned-params
-  --write-detailed-explanations
-  --detailed-output-dir "${DETAIL_DIR}"
-  --write-metric-results
-  --skip-existing-experiments
-  --skip-existing-methods
-  --metrics-output-dir "${METRICS_DIR}"
-  --output-dir "${RESULTS_DIR}"
-  --model-store-dir saved_models
-  --log-level INFO
-  --model "${MODEL_NAME}"
-)
+	cmd=(
+	  python -m src.cli.main "${EXPERIMENT_SUITE}"
+	  --reuse-trained-models
+	  --tune-models
+	  --use-tuned-params
+	  --write-detailed-explanations
+	  --detailed-output-dir "${DETAIL_DIR}"
+	  --write-metric-results
+	  --skip-existing-experiments
+	  --skip-existing-methods
+	  --metrics-output-dir "${METRICS_DIR}"
+	  --output-dir "${RESULTS_DIR}"
+	  --experiment-results-subdir experiment_results
+	  --model-store-dir saved_models
+	  --log-level INFO
+	  --model "${MODEL_NAME}"
+	)
 
 if [[ -n "${MAX_INSTANCES:-}" ]]; then
   cmd+=(--max-instances "${MAX_INSTANCES}")
@@ -52,4 +53,3 @@ printf "Metrics run for '%s' (model: %s, run_id: %s) finished in %02d:%02d:%02d\
   "${MODEL_NAME}" \
   "${RUN_ID}" \
   $((elapsed / 3600)) $(((elapsed % 3600) / 60)) $((elapsed % 60))
-

@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from collections import defaultdict
+from dataclasses import asdict
 from pathlib import Path
 from typing import Any, Dict, Iterable, Mapping, Sequence, Tuple
 
@@ -28,6 +30,23 @@ from .ranker import PersonaPairwiseRanker
 
 DEFAULT_RESULTS_ROOT = Path("results") / "full_run_dec8"
 DEFAULT_PROCESSED_DIR = DEFAULT_RESULTS_ROOT / "preference_learning"
+
+
+def _slug(value: object) -> str:
+    if not isinstance(value, str) or not value:
+        return "unknown"
+    cleaned = []
+    for ch in value.strip():
+        if ch.isalnum() or ch in {"_", "-"}:
+            cleaned.append(ch)
+        else:
+            cleaned.append("_")
+    return "".join(cleaned).lower()
+
+
+def _md5_prefix(payload: object, *, length: int = 8) -> str:
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+    return hashlib.md5(encoded).hexdigest()[:length]
 
 
 def run_linear_svc_experiment(
@@ -114,6 +133,11 @@ def run_persona_linear_svc_simulation(
     test_ids = sorted(int(idx) for idx in test_ids)
 
     persona_config = load_persona_config(persona_config_path)
+    persona_config_raw: dict[str, Any] | None
+    try:
+        persona_config_raw = json.loads(persona_config_path.read_text(encoding="utf-8"))
+    except Exception:
+        persona_config_raw = None
     pareto_metrics, variant_to_method = _load_pareto_metrics_for_encoded(encoded_path)
     autoxai_objective = default_objective_terms()
 
@@ -212,6 +236,10 @@ def run_persona_linear_svc_simulation(
             {
                 "user_index": user_idx,
                 "tau": user.tau,
+                "persona_seed": int(config.persona_seed + user_idx),
+                "label_seed": int(config.label_seed + user_idx),
+                "group_weights": dict(user.group_weights),
+                "metric_weights": dict(user.metric_weights),
                 "train_rows": int(len(X_train)),
                 "test_instances_evaluated": int(instances_evaluated),
                 "top_k_mean": user_topk_mean,
@@ -223,12 +251,29 @@ def run_persona_linear_svc_simulation(
     aggregate = _average_topk(per_user_topk)
     aggregate_autoxai = _average_topk(per_user_autoxai_topk)
     pareto_path = _default_pareto_path(encoded_path)
+    model_conf = model_config or LinearSVCConfig(random_state=config.random_state)
+    persona_config_fingerprint: object
+    if persona_config_raw is not None:
+        persona_config_fingerprint = persona_config_raw
+    else:
+        persona_config_fingerprint = {"path": str(persona_config_path)}
+    config_fingerprint = {
+        "persona_config": persona_config_fingerprint,
+        "experiment_config": asdict(config),
+        "model_config": asdict(model_conf),
+    }
+    config_md5 = _md5_prefix(config_fingerprint)
     result = {
         "dataset": dataset_name,
         "model": model_name,
         "persona": persona_config.persona,
         "encoded_path": str(encoded_path),
         "persona_config_path": str(persona_config_path),
+        "persona_config": persona_config_raw,
+        "persona_sampling": {
+            "metric_order": list(persona_config.metric_names()),
+            "default_tau": float(persona_config.tau) if persona_config.tau is not None else None,
+        },
         "experiment_config": {
             "test_size": config.test_size,
             "random_state": config.random_state,
@@ -237,6 +282,7 @@ def run_persona_linear_svc_simulation(
             "persona_seed": config.persona_seed,
             "label_seed": config.label_seed,
         },
+        "config_md5": config_md5,
         "autoxai_baseline": {
             "scaling": "Std",
             "scaling_scope": "instance",
@@ -260,7 +306,32 @@ def run_persona_linear_svc_simulation(
 
     if output_dir is not None:
         output_dir.mkdir(parents=True, exist_ok=True)
-        (output_dir / "persona_simulation_summary.json").write_text(json.dumps(result, indent=2))
+        output_name = "__".join(
+            [
+                "persona_simulation_summary",
+                _slug(dataset_name),
+                _slug(model_name),
+                _slug(persona_config.persona),
+                config_md5,
+            ]
+        )
+        output_path = output_dir / f"{output_name}.json"
+        output_path.write_text(json.dumps(result, indent=2))
+
+        manifest_path = output_dir / "persona_simulation_manifest.json"
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8")) if manifest_path.exists() else {}
+        except Exception:
+            manifest = {}
+        if not isinstance(manifest, dict):
+            manifest = {}
+        manifest[output_path.name] = {
+            "dataset": dataset_name,
+            "model": model_name,
+            "persona": persona_config.persona,
+            "config_md5": config_md5,
+        }
+        manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True))
     return result
 
 
@@ -306,8 +377,8 @@ def _load_pareto_metrics_for_encoded(encoded_path: Path) -> Tuple[Dict[int, Dict
       - dataset_index -> method_variant -> metrics dict
       - method_variant -> method
     """
-    # We separetely load the raw Pareto metric for the AutoXAI baseline scoring.
-    # Since it doesn't the encoded features. We only need the method variants and their metrics.
+    # We separately load the raw Pareto metrics for the AutoXAI baseline scoring.
+    # The baseline scorer expects raw per-instance metric dicts keyed by method_variant.
     path = _default_pareto_path(encoded_path)
     if not path.exists():
         return {}, {}

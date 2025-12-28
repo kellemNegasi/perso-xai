@@ -12,7 +12,7 @@ class ExperimentConfig:
 
     test_size: float = 0.2
     random_state: int = 42
-    top_k: Sequence[int] = field(default_factory=lambda: (1, 3, 5))
+    top_k: Sequence[int] = field(default_factory=lambda: (3, 5, 8))
     num_users: int = 10
     persona_seed: int = 13
     label_seed: int = 41

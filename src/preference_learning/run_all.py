@@ -98,7 +98,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
 
 def parse_top_k(values: Iterable[str] | None) -> Sequence[int]:
     if not values:
-        return (1, 3, 5)
+        return (3, 5, 8)
     parsed: list[int] = []
     for value in values:
         try:

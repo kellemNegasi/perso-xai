@@ -25,7 +25,7 @@ PERSONA_CONFIGS = {
 
 def parse_top_k(values: Sequence[str] | None) -> Sequence[int]:
     if not values:
-        return (1, 3, 5)
+        return (3, 5, 8)
     parsed = []
     for value in values:
         try:

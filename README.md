@@ -19,12 +19,12 @@ Human Centered XAI (HC-XAI) is a framework for generating, evaluating, and perso
   python3 encode_pareto_fronts.py \
     --pareto-dir results/full_run_dec8/pareto_fronts \
     --metadata-dir results/full_run_dec8/metadata \
-    --output-dir results/full_run_dec8/encoded_pareto_fronts/features_full_time_stamp
+    --output-dir results/full_run_dec8/encoded_pareto_fronts/features_full_lm_stats
   ```
 - **Run prefernce-learning experiments** across personas and all encoded files:
   ```
   python3 -m src.preference_learning.run_all \
-    --encoded-dir results/full_run_dec8/encoded_pareto_fronts/features_full_time_stamp \
+    --encoded-dir results/full_run_dec8/encoded_pareto_fronts/features_full_lm_stats \
     --output-dir results/full_run_dec8/preference_learning_simulation \
     --personas layperson regulator clinician \
     --num-users 10
@@ -47,6 +47,7 @@ Set `experiment.logging.level` within an explainer’s config entry to throttle 
 ## AutoXAI Baseline (LIME/SHAP)
 
 To compare an AutoXAI-style “scalarized objective” recommender against HC-XAI without rerunning explainers, see `baseline/README.md`. The baseline consumes cached `metrics_results/*_metrics.json` artifacts and produces a ranking over LIME/SHAP variants plus an optional comparison against HC-XAI pair-label parquet files.
+The AutoXAI objective now mirrors the paper’s fixed metrics for every persona: continuity (`relative_input_stability`), correctness/fidelity (`correctness`, `infidelity`, non-sensitivity, monotonicity), and compactness (sparsity/top-k coverage/effective features).
 
 ### SHAP (`shap`)
 Hybrid Tree/Kernel SHAP implementation [(`src/explainers/shap_explainer.py`)](src/explainers/shap_explainer.py). Tree models use `shap.TreeExplainer`; other models fall back to Kernel SHAP with a randomly sampled background set. Parameter: `background_sample_size` (default 100) controls how many training points form the background distribution for Kernel SHAP; larger values reduce variance but increase runtime.

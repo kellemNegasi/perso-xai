@@ -25,6 +25,7 @@ DEFAULT_NEGATE_METRICS: frozenset[str] = frozenset(
         "infidelity",
         "non_sensitivity_violation_fraction",
         "non_sensitivity_delta_mean",
+        "relative_input_stability",
         "covariate_complexity",
     }
 )

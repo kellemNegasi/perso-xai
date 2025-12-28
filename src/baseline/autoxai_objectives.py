@@ -38,6 +38,14 @@ def _metric_fetchers() -> Dict[str, Any]:
         "compactness_top10_coverage",
         "compactness_top5_coverage",
     )
+    correctness_keys = (
+        "correctness",
+        "infidelity",
+        "non_sensitivity_violation_fraction",
+        "non_sensitivity_safe_fraction",
+        "non_sensitivity_delta_mean",
+        "monotonicity",
+    )
 
     def mean_metric(metrics: Mapping[str, float], keys: Sequence[str]) -> Optional[float]:
         collected: List[float] = []
@@ -51,6 +59,7 @@ def _metric_fetchers() -> Dict[str, Any]:
 
     return {
         "compactness": lambda metrics: mean_metric(metrics, compactness_keys),
+        "correctness_group": lambda metrics: mean_metric(metrics, correctness_keys),
         "contrastivity": lambda metrics: safe_float(metrics.get("contrastivity")),
         "stability": lambda metrics: safe_float(metrics.get("relative_input_stability")),
         "faithfulness": lambda metrics: safe_float(metrics.get("correctness")),
@@ -68,42 +77,46 @@ def fetch_metric(metrics: Mapping[str, float], metric_key: str) -> Optional[floa
 
 def default_objective_terms() -> List[ObjectiveTerm]:
     """
-    A practical AutoXAI-like objective for HC-XAI's per-instance metrics.
+    AutoXAI-paper-aligned objective (same for all personas).
 
     Notes:
-    - AutoXAI maximizes -infidelity and -robustness losses.
-    - HC-XAI exposes per-instance 'infidelity' and 'relative_input_stability' (lower is better).
-    - For conciseness we use compactness_effective_features (higher is more compact).
+    - Robustness/continuity: relative_input_stability (lower is better).
+    - Correctness/fidelity: include correctness, infidelity, and non-sensitivity/monotonicity signals.
+    - Compactness: aggregate HC-XAI compactness metrics (higher is better).
     """
     return [
-        ObjectiveTerm(name="robustness", metric_key="relative_input_stability", direction="min", weight=1.0),
-        ObjectiveTerm(name="fidelity", metric_key="infidelity", direction="min", weight=2.0),
-        ObjectiveTerm(name="conciseness", metric_key="compactness_effective_features", direction="max", weight=0.5),
+        # continuity / robustness
+        ObjectiveTerm(name="continuity", metric_key="relative_input_stability", direction="min", weight=1.0),
+        # correctness / fidelity group
+        ObjectiveTerm(name="correctness", metric_key="correctness", direction="max", weight=1.0),
+        ObjectiveTerm(name="infidelity", metric_key="infidelity", direction="min", weight=1.0),
+        ObjectiveTerm(
+            name="non_sensitivity_violation_fraction", 
+            metric_key="non_sensitivity_violation_fraction",
+            direction="min",
+            weight=1.0,
+            ),
+        ObjectiveTerm(
+            name="non_sensitivity_safe_fraction",
+            metric_key="non_sensitivity_safe_fraction",
+            direction="max",
+            weight=1.0,
+            ),
+        ObjectiveTerm(
+            name="non_sensitivity_delta_mean",
+            metric_key="non_sensitivity_delta_mean",
+            direction="min",
+            weight=1.0,
+        ),
+        ObjectiveTerm(name="monotonicity", metric_key="monotonicity", direction="max", weight=1.0),
+        # compactness group
+        ObjectiveTerm(name="compactness", metric_key="compactness", direction="max", weight=1.0),
     ]
 
 
 def persona_objective_terms(persona: str) -> List[ObjectiveTerm]:
     """
-    Persona-aligned objectives using the same metric groupings as HC-XAI's pair-label generator.
-
-    See `hc-xai/candidates_pair_ranker.py` for the priority definitions:
-      - layperson: compactness -> contrastivity -> stability
-      - regulator: faithfulness -> completeness -> consistency -> compactness
+    Persona-aligned objectives: paper-aligned metrics for every persona.
     """
-    if persona == "layperson":
-        return [
-            ObjectiveTerm(name="compactness", metric_key="compactness", direction="max", weight=1.0),
-            ObjectiveTerm(name="contrastivity", metric_key="contrastivity", direction="max", weight=1.0),
-            ObjectiveTerm(name="stability", metric_key="stability", direction="min", weight=1.0),
-        ]
-    if persona == "regulator":
-        return [
-            ObjectiveTerm(name="faithfulness", metric_key="faithfulness", direction="max", weight=1.0),
-            ObjectiveTerm(name="completeness", metric_key="completeness", direction="max", weight=1.0),
-            ObjectiveTerm(name="consistency", metric_key="consistency", direction="max", weight=1.0),
-            ObjectiveTerm(name="compactness", metric_key="compactness", direction="max", weight=1.0),
-        ]
-    if persona == "autoxai":
-        return default_objective_terms()
-    raise ValueError(f"Unknown persona: {persona!r}")
-
+    # All personas share the same objective to mirror the AutoXAI paper.
+    return default_objective_terms()

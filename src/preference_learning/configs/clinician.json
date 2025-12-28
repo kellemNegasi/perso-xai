@@ -1,0 +1,52 @@
+{
+  "persona": "clinician",
+  "type": "hierarchical_dirichlet",
+  "tau": 0.05,
+  "description": "Clinical/healthcare user prioritizing reliability, faithfulness, and stability for decision support; prefers reasonably concise explanations but not at the expense of correctness.",
+  "groups": {
+    "faithfulness": {
+      "alpha": 11,
+      "metrics": {
+        "correctness": 6,
+        "completeness_score": 4,
+        "infidelity": 3,
+        "monotonicity": 2
+      }
+    },
+    "robustness": {
+      "alpha": 9,
+      "metrics": {
+        "continuity": 4,
+        "relative_input_stability": 4,
+        "consistency": 3,
+        "non_sensitivity_delta_mean": 2,
+        "non_sensitivity_safe_fraction": 2,
+        "non_sensitivity_violation_fraction": 2,
+        "non_sensitivity_zero_features": 1
+      }
+    },
+    "structure_confidence": {
+      "alpha": 7,
+      "metrics": {
+        "confidence": 5,
+        "covariate_regularity": 4,
+        "covariate_complexity": 2
+      }
+    },
+    "contrastivity": {
+      "alpha": 3,
+      "metrics": {
+        "contrastivity": 1
+      }
+    },
+    "compactness": {
+      "alpha": 4,
+      "metrics": {
+        "compactness_effective_features": 3,
+        "compactness_top5_coverage": 3,
+        "compactness_sparsity": 2,
+        "compactness_top10_coverage": 1
+      }
+    }
+  }
+}

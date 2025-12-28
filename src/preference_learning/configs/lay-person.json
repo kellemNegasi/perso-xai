@@ -1,0 +1,50 @@
+{
+  "persona": "lay_user",
+  "type": "hierarchical_dirichlet",
+  "tau": 0.05,
+  "description": "Non-expert user prioritizing simplicity, contrastive explanations, and ease of understanding.",
+  "groups": {
+    "compactness": {
+      "alpha": 9,
+      "metrics": {
+        "compactness_sparsity": 4,
+        "compactness_effective_features": 3,
+        "compactness_top5_coverage": 3,
+        "compactness_top10_coverage": 2
+      }
+    },
+    "contrastivity": {
+      "alpha": 5,
+      "metrics": {
+        "contrastivity": 12
+      }
+    },
+    "faithfulness": {
+      "alpha": 6,
+      "metrics": {
+        "correctness": 5,
+        "completeness_score": 3,
+        "infidelity": 2,
+        "monotonicity": 2
+      }
+    },
+    "structure_confidence": {
+      "alpha": 3,
+      "metrics": {
+        "confidence": 5,
+        "covariate_regularity": 4,
+        "covariate_complexity": 3
+      }
+    },
+    "robustness": {
+      "alpha": 3,
+      "metrics": {
+        "continuity": 4,
+        "relative_input_stability": 3,
+        "consistency": 2,
+        "non_sensitivity_delta_mean": 2,
+        "non_sensitivity_violation_fraction": 1
+      }
+    }
+  }
+}

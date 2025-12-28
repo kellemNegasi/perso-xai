@@ -1,0 +1,52 @@
+{
+  "persona": "regulator",
+  "type": "hierarchical_dirichlet",
+  "tau": 0.05,
+  "description": "Regulatory or expert user prioritizing faithfulness, robustness, and auditability over simplicity.",
+  "groups": {
+    "faithfulness": {
+      "alpha": 12,
+      "metrics": {
+        "correctness": 6,
+        "infidelity": 4,
+        "completeness_score": 3,
+        "monotonicity": 2
+      }
+    },
+    "robustness": {
+      "alpha": 9,
+      "metrics": {
+        "relative_input_stability": 4,
+        "continuity": 3,
+        "consistency": 3,
+        "non_sensitivity_delta_mean": 2,
+        "non_sensitivity_safe_fraction": 2,
+        "non_sensitivity_violation_fraction": 2,
+        "non_sensitivity_zero_features": 1
+      }
+    },
+    "structure_confidence": {
+      "alpha": 4,
+      "metrics": {
+        "covariate_complexity": 3,
+        "covariate_regularity": 3,
+        "confidence": 2
+      }
+    },
+    "compactness": {
+      "alpha": 2,
+      "metrics": {
+        "compactness_effective_features": 3,
+        "compactness_sparsity": 2,
+        "compactness_top5_coverage": 2,
+        "compactness_top10_coverage": 1
+      }
+    },
+    "contrastivity": {
+      "alpha": 2,
+      "metrics": {
+        "contrastivity": 1
+      }
+    }
+  }
+}

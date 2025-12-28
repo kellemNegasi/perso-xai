@@ -1,0 +1,244 @@
+"""Persona models for sampling user preferences over explanation metrics.
+
+This module implements hierarchical Dirichlet personas defined by JSON configs
+in `src/preference_learning/configs/`. A persona samples:
+1) group weights over metric groups, and
+2) within-group weights over metrics,
+then combines them into final metric weights.
+
+These weights can be used to compute utilities over z-normalised metric vectors
+and to sample pairwise preferences via a logistic (sigmoid) model.
+"""
+
+from __future__ import annotations
+
+import json
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Dict, Iterable, Mapping, MutableMapping, Sequence
+
+import numpy as np
+
+# Metrics where "lower is better" in raw form; we flip sign to align with utility maximisation.
+DEFAULT_NEGATE_METRICS: frozenset[str] = frozenset(
+    {
+        "infidelity",
+        "non_sensitivity_violation_fraction",
+        "non_sensitivity_delta_mean",
+        "covariate_complexity",
+    }
+)
+
+DEFAULT_TAU: float = 0.05
+
+
+@dataclass(frozen=True)
+class MetricGroupConfig:
+    name: str
+    alpha: float
+    metrics: Mapping[str, float]
+
+    def metric_names(self) -> Sequence[str]:
+        return tuple(self.metrics.keys())
+
+
+@dataclass(frozen=True)
+class PersonaConfig:
+    persona: str
+    type: str
+    description: str | None
+    tau: float | None
+    groups: Sequence[MetricGroupConfig]
+
+    def metric_names(self) -> Sequence[str]:
+        seen: set[str] = set()
+        ordered: list[str] = []
+        for group in self.groups:
+            for metric in group.metrics.keys():
+                if metric not in seen:
+                    ordered.append(metric)
+                    seen.add(metric)
+        return tuple(ordered)
+
+    @classmethod
+    def from_dict(cls, payload: Mapping[str, object]) -> "PersonaConfig":
+        persona = payload.get("persona")
+        persona_type = payload.get("type")
+        if not isinstance(persona, str) or not persona:
+            raise ValueError("Persona config missing non-empty 'persona' field.")
+        if not isinstance(persona_type, str) or not persona_type:
+            raise ValueError("Persona config missing non-empty 'type' field.")
+        description = payload.get("description")
+        if description is not None and not isinstance(description, str):
+            description = None
+        tau = payload.get("tau")
+        if tau is None:
+            parsed_tau: float | None = None
+        elif isinstance(tau, (int, float)):
+            if float(tau) <= 0:
+                raise ValueError(f"Persona config has invalid tau={tau!r}; must be > 0.")
+            parsed_tau = float(tau)
+        else:
+            raise ValueError(f"Persona config has invalid tau type: {type(tau)}")
+        raw_groups = payload.get("groups")
+        if not isinstance(raw_groups, Mapping) or not raw_groups:
+            raise ValueError("Persona config missing non-empty 'groups' mapping.")
+
+        groups: list[MetricGroupConfig] = []
+        for group_name, group_payload in raw_groups.items():
+            if not isinstance(group_name, str) or not group_name:
+                continue
+            if not isinstance(group_payload, Mapping):
+                continue
+            alpha = group_payload.get("alpha")
+            metrics = group_payload.get("metrics")
+            if not isinstance(alpha, (int, float)) or alpha <= 0:
+                raise ValueError(f"Group '{group_name}' has invalid alpha={alpha!r}.")
+            if not isinstance(metrics, Mapping) or not metrics:
+                raise ValueError(f"Group '{group_name}' has no metrics mapping.")
+            metric_alphas: Dict[str, float] = {}
+            for metric_name, metric_alpha in metrics.items():
+                if not isinstance(metric_name, str) or not metric_name:
+                    continue
+                if not isinstance(metric_alpha, (int, float)) or metric_alpha <= 0:
+                    raise ValueError(
+                        f"Metric '{metric_name}' in group '{group_name}' has invalid alpha={metric_alpha!r}."
+                    )
+                metric_alphas[metric_name] = float(metric_alpha)
+            if not metric_alphas:
+                raise ValueError(f"Group '{group_name}' contains no valid metrics.")
+            groups.append(
+                MetricGroupConfig(
+                    name=group_name,
+                    alpha=float(alpha),
+                    metrics=metric_alphas,
+                )
+            )
+
+        if not groups:
+            raise ValueError("Persona config contains no valid groups.")
+        return cls(
+            persona=persona,
+            type=persona_type,
+            description=description,
+            tau=parsed_tau,
+            groups=tuple(groups),
+        )
+
+
+def load_persona_config(path: Path) -> PersonaConfig:
+    with path.open("r", encoding="utf-8") as handle:
+        payload = json.load(handle)
+    if not isinstance(payload, Mapping):
+        raise ValueError(f"Persona config must be a JSON object. Got: {type(payload)}")
+    return PersonaConfig.from_dict(payload)
+
+
+def _sigmoid(x: np.ndarray) -> np.ndarray:
+    # Stable sigmoid implementation (avoids overflow for large |x|).
+    out = np.empty_like(x, dtype=float)
+    pos = x >= 0
+    out[pos] = 1.0 / (1.0 + np.exp(-x[pos]))
+    exp_x = np.exp(x[~pos])
+    out[~pos] = exp_x / (1.0 + exp_x)
+    return out
+
+
+def z_normalize_matrix(values: np.ndarray) -> np.ndarray:
+    """Column-wise z-normalisation ignoring NaNs; NaNs become 0 after scaling."""
+    if values.ndim != 2:
+        raise ValueError("values must be a 2D array (n_candidates, n_metrics).")
+    means = np.nanmean(values, axis=0)
+    stds = np.nanstd(values, axis=0)
+    stds = np.where(stds > 0, stds, 1.0)
+    z = (values - means) / stds
+    return np.nan_to_num(z, nan=0.0, posinf=0.0, neginf=0.0)
+
+
+class HierarchicalDirichletUser:
+    """A single sampled user instance with fixed metric weights."""
+
+    def __init__(
+        self,
+        config: PersonaConfig,
+        *,
+        seed: int | None = None,
+        tau: float | None = None,
+        negate_metrics: Iterable[str] = DEFAULT_NEGATE_METRICS,
+    ) -> None:
+        resolved_tau = float(DEFAULT_TAU if tau is None else tau)
+        if config.tau is not None and tau is None:
+            resolved_tau = float(config.tau)
+        if resolved_tau <= 0:
+            raise ValueError("tau must be > 0.")
+        self.config = config
+        self.tau = float(resolved_tau)
+        self.negate_metrics = frozenset(negate_metrics)
+        self._rng = np.random.default_rng(seed)
+        self.metric_order: tuple[str, ...] = tuple(config.metric_names())
+        self.metric_weights: Dict[str, float] = {}
+        self.group_weights: Dict[str, float] = {}
+        self._weight_vector: np.ndarray | None = None
+        self.resample_weights()
+
+    @property
+    def weight_vector(self) -> np.ndarray:
+        if self._weight_vector is None:
+            self._weight_vector = np.asarray(
+                [self.metric_weights.get(name, 0.0) for name in self.metric_order],
+                dtype=float,
+            )
+        return self._weight_vector
+
+    def resample_weights(self) -> None:
+        """(Re)sample hierarchical Dirichlet weights and cache as a metric vector."""
+        groups = list(self.config.groups)
+        group_alphas = np.asarray([group.alpha for group in groups], dtype=float)
+        group_weights = self._rng.dirichlet(group_alphas)
+        self.group_weights = {group.name: float(w) for group, w in zip(groups, group_weights)}
+
+        metric_weights: MutableMapping[str, float] = {}
+        for group, group_w in zip(groups, group_weights):
+            metric_names = list(group.metrics.keys())
+            metric_alphas = np.asarray([group.metrics[name] for name in metric_names], dtype=float)
+            within = self._rng.dirichlet(metric_alphas)
+            for metric_name, metric_w in zip(metric_names, within):
+                metric_weights[metric_name] = metric_weights.get(metric_name, 0.0) + float(
+                    group_w * metric_w
+                )
+
+        total = float(sum(metric_weights.values()))
+        if total <= 0:
+            raise RuntimeError("Sampled metric weights sum to 0; check persona config alphas.")
+        self.metric_weights = {k: v / total for k, v in metric_weights.items()}
+        self._weight_vector = None
+
+    def transform_metric_value(self, metric_name: str, value: float) -> float:
+        return -float(value) if metric_name in self.negate_metrics else float(value)
+
+    def vectorize_metrics(self, metrics: Mapping[str, object]) -> np.ndarray:
+        """Convert a raw metric mapping into a dense vector aligned with `metric_order`."""
+        vec = np.full((len(self.metric_order),), np.nan, dtype=float)
+        for idx, name in enumerate(self.metric_order):
+            raw = metrics.get(name)
+            if isinstance(raw, (int, float)):
+                vec[idx] = self.transform_metric_value(name, float(raw))
+        return vec
+
+    def utilities(self, z_matrix: np.ndarray) -> np.ndarray:
+        """Compute U for each candidate: U = sum_j w_j * z_j."""
+        if z_matrix.ndim != 2 or z_matrix.shape[1] != len(self.metric_order):
+            raise ValueError("z_matrix must be (n_candidates, n_metrics) matching metric_order.")
+        return z_matrix @ self.weight_vector
+
+    def preference_probability(self, z_i: np.ndarray, z_j: np.ndarray) -> float:
+        """Compute P(e_i ≻ e_j) = sigmoid(w^T(z_i - z_j) / tau)."""
+        if z_i.shape != z_j.shape or z_i.shape != (len(self.metric_order),):
+            raise ValueError("z_i and z_j must be 1D vectors aligned with metric_order.")
+        delta = float(np.dot(self.weight_vector, (z_i - z_j)))
+        return float(_sigmoid(np.asarray([delta / self.tau]))[0])
+
+    def sample_preference(self, z_i: np.ndarray, z_j: np.ndarray) -> bool:
+        """Sample a Bernoulli preference label for (i over j)."""
+        p = self.preference_probability(z_i, z_j)
+        return bool(self._rng.random() < p)

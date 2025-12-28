@@ -30,7 +30,6 @@ DEFAULT_OUTPUT_DIR = DEFAULT_RESULTS_ROOT / "encoded_pareto_fronts"
 DEFAULT_HPARAM_CONFIG = Path("src") / "configs" / "explainer_hyperparameters.yml"
 
 DATASET_META_FIELDS = (
-    "dataset_id",
     "log_feature_count_z",
     "class_entropy_z",
     "categorical_to_numerical_ratio_z",
@@ -39,7 +38,6 @@ DATASET_META_FIELDS = (
 )
 
 EXPLAINER_META_FIELDS = (
-    "explainer_id",
     "type",
     "is_additive_attribution",
     "is_gradient_based",
@@ -189,6 +187,12 @@ def encode_pareto_file(
     if dataset_name not in dataset_meta:
         raise KeyError(f"Dataset '{dataset_name}' missing from dataset metadata.")
     dataset_features = dataset_meta[dataset_name]
+    dataset_ids = _sorted_unique_ints(
+        record.get("dataset_id") for record in dataset_meta.values()
+    )
+    explainer_ids = _sorted_unique_ints(
+        record.get("explainer_id") for record in explainer_meta.values()
+    )
     instances = payload.get("instances") or []
 
     records: List[Dict[str, Any]] = []
@@ -202,6 +206,8 @@ def encode_pareto_file(
             method_variant = entry.get("method_variant")
             metrics = transform_metrics(entry.get("metrics") or {})
             expl_meta = explainer_meta[method]
+            dataset_id = dataset_features.get("dataset_id")
+            explainer_id = expl_meta.get("explainer_id")
             hparam_values = parse_variant_hyperparameters(method_variant)
             hp_features, applicability = encode_hyperparameters(
                 method,
@@ -216,8 +222,16 @@ def encode_pareto_file(
                 "method": method,
                 "method_variant": method_variant,
             }
+            if dataset_id is None:
+                raise KeyError(f"Dataset '{dataset_name}' is missing dataset_id in metadata.")
+            for value in dataset_ids:
+                row[f"dataset_id_oh_{value}"] = 1 if value == dataset_id else 0
             for field in DATASET_META_FIELDS:
                 row[f"dataset_{field}"] = dataset_features.get(field)
+            if explainer_id is None:
+                raise KeyError(f"Explainer '{method}' is missing explainer_id in metadata.")
+            for value in explainer_ids:
+                row[f"explainer_id_oh_{value}"] = 1 if value == explainer_id else 0
             for field in EXPLAINER_META_FIELDS:
                 key = f"explainer_{field}" if field != "type" else "explainer_type"
                 row[key] = expl_meta.get(field)
@@ -346,6 +360,16 @@ def _coerce_float(value: Any) -> Optional[float]:
         return float(text)
     except ValueError:
         return None
+
+
+def _sorted_unique_ints(values: Iterable[Any]) -> List[int]:
+    unique: set[int] = set()
+    for value in values:
+        try:
+            unique.add(int(value))
+        except (TypeError, ValueError):
+            continue
+    return sorted(unique)
 
 
 def _load_json(path: Path) -> Dict[str, Any]:

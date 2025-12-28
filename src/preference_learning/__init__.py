@@ -7,7 +7,7 @@ from .data import (
     PreferenceDatasetBuilder,
 )
 from .models import LinearSVCConfig, LinearSVCPreferenceModel
-from .pipeline import run_linear_svc_experiment
+from .pipeline import run_linear_svc_experiment, run_persona_linear_svc_simulation
 
 __all__ = [
     "ExperimentConfig",
@@ -17,4 +17,5 @@ __all__ = [
     "LinearSVCConfig",
     "LinearSVCPreferenceModel",
     "run_linear_svc_experiment",
+    "run_persona_linear_svc_simulation",
 ]

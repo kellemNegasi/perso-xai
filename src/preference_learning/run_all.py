@@ -9,12 +9,18 @@ from typing import Iterable, Sequence
 
 from .config import ExperimentConfig
 from .models import LinearSVCConfig
-from .pipeline import run_linear_svc_experiment
+from .pipeline import run_persona_linear_svc_simulation
 
 DEFAULT_RESULTS_ROOT = Path("results") / "full_run_dec8"
 DEFAULT_ENCODED_DIR = DEFAULT_RESULTS_ROOT / "encoded_pareto_fronts"
 DEFAULT_OUTPUT_DIR = DEFAULT_RESULTS_ROOT / "preference_learning"
-PERSONAS = ("layperson", "regulator")
+DEFAULT_PERSONA_CONFIG_DIR = Path("src") / "preference_learning" / "configs"
+PERSONA_CONFIGS = {
+    "layperson": DEFAULT_PERSONA_CONFIG_DIR / "lay-person.json",
+    "regulator": DEFAULT_PERSONA_CONFIG_DIR / "regulator.json",
+    "clinician": DEFAULT_PERSONA_CONFIG_DIR / "clinician.json",
+}
+PERSONAS = tuple(sorted(PERSONA_CONFIGS))
 
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
@@ -58,6 +64,24 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         help="Space-separated list of k values for evaluation (default: 1 3 5).",
     )
     parser.add_argument(
+        "--num-users",
+        type=int,
+        default=10,
+        help="Number of sampled users per persona (default: 10).",
+    )
+    parser.add_argument(
+        "--persona-seed",
+        type=int,
+        default=13,
+        help="Base seed for Dirichlet persona sampling (default: 13).",
+    )
+    parser.add_argument(
+        "--label-seed",
+        type=int,
+        default=41,
+        help="Base seed for sampling pairwise labels (default: 41).",
+    )
+    parser.add_argument(
         "--svc-C",
         type=float,
         default=1.0,
@@ -98,6 +122,9 @@ def main(argv: Sequence[str] | None = None) -> None:
         test_size=args.test_size,
         random_state=args.random_state,
         top_k=tuple(top_k),
+        num_users=int(args.num_users),
+        persona_seed=int(args.persona_seed),
+        label_seed=int(args.label_seed),
     )
     model_config = LinearSVCConfig(
         C=args.svc_C,
@@ -106,20 +133,17 @@ def main(argv: Sequence[str] | None = None) -> None:
     )
 
     for persona in args.personas:
-        pair_labels_dir = DEFAULT_RESULTS_ROOT / f"candidate_pair_rankings_{persona}"
-        if not pair_labels_dir.exists():
-            raise FileNotFoundError(f"Pair labels directory missing for persona {persona}: {pair_labels_dir}")
+        persona_config_path = PERSONA_CONFIGS[persona]
         for encoded_path in encoded_files:
             print(f"Running {persona} experiment for {encoded_path.name}")
-            metrics = run_linear_svc_experiment(
+            result = run_persona_linear_svc_simulation(
                 encoded_path=encoded_path,
-                pair_labels_dir=pair_labels_dir,
-                persona=persona,
+                persona_config_path=persona_config_path,
                 output_dir=args.output_dir,
                 experiment_config=experiment_config,
                 model_config=model_config,
             )
-            print(json.dumps(metrics, indent=2))
+            print(json.dumps(result, indent=2))
 
 
 if __name__ == "__main__":  # pragma: no cover - CLI hook

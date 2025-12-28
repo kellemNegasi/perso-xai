@@ -124,6 +124,25 @@ def build_dataset_metadata(
     log_feature_values: Dict[str, float] = {}
     entropy_values: Dict[str, float] = {}
     categorical_ratio_values: Dict[str, float] = {}
+    log_dataset_size_values: Dict[str, float] = {}
+    mean_of_means_values: Dict[str, float] = {}
+    std_of_means_values: Dict[str, float] = {}
+    mean_variance_values: Dict[str, float] = {}
+    max_variance_values: Dict[str, float] = {}
+    mean_skewness_values: Dict[str, float] = {}
+    std_skewness_values: Dict[str, float] = {}
+    max_kurtosis_values: Dict[str, float] = {}
+    mean_std_values: Dict[str, float] = {}
+    std_std_values: Dict[str, float] = {}
+    max_std_values: Dict[str, float] = {}
+    mean_range_values: Dict[str, float] = {}
+    max_range_values: Dict[str, float] = {}
+    mean_cardinality_values: Dict[str, float] = {}
+    max_cardinality_values: Dict[str, float] = {}
+    mean_cat_entropy_values: Dict[str, float] = {}
+    std_cat_entropy_values: Dict[str, float] = {}
+    mean_top_freq_values: Dict[str, float] = {}
+    max_top_freq_values: Dict[str, float] = {}
 
     for dataset_id, dataset_name in enumerate(dataset_names):
         spec = registry.get(dataset_name)
@@ -151,6 +170,8 @@ def build_dataset_metadata(
             dataset.feature_names,
         )
         high_stakes = detect_high_stakes_domain(dataset_name, spec)
+        numeric_stats = compute_numeric_feature_statistics(raw_feature_frame, dataset)
+        categorical_stats = compute_categorical_feature_statistics(raw_feature_frame)
 
         record = {
             "dataset_id": dataset_id,
@@ -162,19 +183,78 @@ def build_dataset_metadata(
             "n_numeric_features": numeric_count,
             "has_sensitive_attributes": has_sensitive,
             "high_stakes_domain": high_stakes,
+            **numeric_stats,
+            **categorical_stats,
         }
         if openml_meta and openml_meta.get("data_id"):
             record["openml_data_id"] = openml_meta["data_id"]
         dataset_records[dataset_name] = record
+        log_dataset_size_values[dataset_name] = numeric_stats["log_dataset_size"]
+        mean_of_means_values[dataset_name] = numeric_stats["mean_of_means"]
+        std_of_means_values[dataset_name] = numeric_stats["std_of_means"]
+        mean_variance_values[dataset_name] = numeric_stats["mean_variance"]
+        max_variance_values[dataset_name] = numeric_stats["max_variance"]
+        mean_skewness_values[dataset_name] = numeric_stats["mean_skewness"]
+        std_skewness_values[dataset_name] = numeric_stats["std_skewness"]
+        max_kurtosis_values[dataset_name] = numeric_stats["max_kurtosis"]
+        mean_std_values[dataset_name] = numeric_stats["mean_std"]
+        std_std_values[dataset_name] = numeric_stats["std_std"]
+        max_std_values[dataset_name] = numeric_stats["max_std"]
+        mean_range_values[dataset_name] = numeric_stats["mean_range"]
+        max_range_values[dataset_name] = numeric_stats["max_range"]
+        mean_cardinality_values[dataset_name] = categorical_stats["mean_cardinality"]
+        max_cardinality_values[dataset_name] = categorical_stats["max_cardinality"]
+        mean_cat_entropy_values[dataset_name] = categorical_stats["mean_cat_entropy"]
+        std_cat_entropy_values[dataset_name] = categorical_stats["std_cat_entropy"]
+        mean_top_freq_values[dataset_name] = categorical_stats["mean_top_freq"]
+        max_top_freq_values[dataset_name] = categorical_stats["max_top_freq"]
 
     log_stats, log_feature_z = compute_z_scores(log_feature_values)
     entropy_stats, entropy_z = compute_z_scores(entropy_values)
     ratio_stats, ratio_z = compute_z_scores(categorical_ratio_values)
+    dataset_size_stats, log_dataset_size_z = compute_z_scores(log_dataset_size_values)
+    mean_of_means_stats, mean_of_means_z = compute_z_scores(mean_of_means_values)
+    std_of_means_stats, std_of_means_z = compute_z_scores(std_of_means_values)
+    mean_variance_stats, mean_variance_z = compute_z_scores(mean_variance_values)
+    max_variance_stats, max_variance_z = compute_z_scores(max_variance_values)
+    mean_skewness_stats, mean_skewness_z = compute_z_scores(mean_skewness_values)
+    std_skewness_stats, std_skewness_z = compute_z_scores(std_skewness_values)
+    max_kurtosis_stats, max_kurtosis_z = compute_z_scores(max_kurtosis_values)
+    mean_std_stats, mean_std_z = compute_z_scores(mean_std_values)
+    std_std_stats, std_std_z = compute_z_scores(std_std_values)
+    max_std_stats, max_std_z = compute_z_scores(max_std_values)
+    mean_range_stats, mean_range_z = compute_z_scores(mean_range_values)
+    max_range_stats, max_range_z = compute_z_scores(max_range_values)
+    mean_cardinality_stats, mean_cardinality_z = compute_z_scores(mean_cardinality_values)
+    max_cardinality_stats, max_cardinality_z = compute_z_scores(max_cardinality_values)
+    mean_cat_entropy_stats, mean_cat_entropy_z = compute_z_scores(mean_cat_entropy_values)
+    std_cat_entropy_stats, std_cat_entropy_z = compute_z_scores(std_cat_entropy_values)
+    mean_top_freq_stats, mean_top_freq_z = compute_z_scores(mean_top_freq_values)
+    max_top_freq_stats, max_top_freq_z = compute_z_scores(max_top_freq_values)
 
     for dataset_name, record in dataset_records.items():
         record["log_feature_count_z"] = log_feature_z.get(dataset_name, 0.0)
         record["class_entropy_z"] = entropy_z.get(dataset_name, 0.0)
         record["categorical_to_numerical_ratio_z"] = ratio_z.get(dataset_name, 0.0)
+        record["log_dataset_size_z"] = log_dataset_size_z.get(dataset_name, 0.0)
+        record["mean_of_means_z"] = mean_of_means_z.get(dataset_name, 0.0)
+        record["std_of_means_z"] = std_of_means_z.get(dataset_name, 0.0)
+        record["mean_variance_z"] = mean_variance_z.get(dataset_name, 0.0)
+        record["max_variance_z"] = max_variance_z.get(dataset_name, 0.0)
+        record["mean_skewness_z"] = mean_skewness_z.get(dataset_name, 0.0)
+        record["std_skewness_z"] = std_skewness_z.get(dataset_name, 0.0)
+        record["max_kurtosis_z"] = max_kurtosis_z.get(dataset_name, 0.0)
+        record["mean_std_z"] = mean_std_z.get(dataset_name, 0.0)
+        record["std_std_z"] = std_std_z.get(dataset_name, 0.0)
+        record["max_std_z"] = max_std_z.get(dataset_name, 0.0)
+        record["mean_range_z"] = mean_range_z.get(dataset_name, 0.0)
+        record["max_range_z"] = max_range_z.get(dataset_name, 0.0)
+        record["mean_cardinality_z"] = mean_cardinality_z.get(dataset_name, 0.0)
+        record["max_cardinality_z"] = max_cardinality_z.get(dataset_name, 0.0)
+        record["mean_cat_entropy_z"] = mean_cat_entropy_z.get(dataset_name, 0.0)
+        record["std_cat_entropy_z"] = std_cat_entropy_z.get(dataset_name, 0.0)
+        record["mean_top_freq_z"] = mean_top_freq_z.get(dataset_name, 0.0)
+        record["max_top_freq_z"] = max_top_freq_z.get(dataset_name, 0.0)
 
     payload = {
         "generated_at": datetime.utcnow().isoformat(),
@@ -183,6 +263,25 @@ def build_dataset_metadata(
             "log_feature_count": log_stats,
             "class_entropy": entropy_stats,
             "categorical_to_numerical_ratio": ratio_stats,
+            "log_dataset_size": dataset_size_stats,
+            "mean_of_means": mean_of_means_stats,
+            "std_of_means": std_of_means_stats,
+            "mean_variance": mean_variance_stats,
+            "max_variance": max_variance_stats,
+            "mean_skewness": mean_skewness_stats,
+            "std_skewness": std_skewness_stats,
+            "max_kurtosis": max_kurtosis_stats,
+            "mean_std": mean_std_stats,
+            "std_std": std_std_stats,
+            "max_std": max_std_stats,
+            "mean_range": mean_range_stats,
+            "max_range": max_range_stats,
+            "mean_cardinality": mean_cardinality_stats,
+            "max_cardinality": max_cardinality_stats,
+            "mean_cat_entropy": mean_cat_entropy_stats,
+            "std_cat_entropy": std_cat_entropy_stats,
+            "mean_top_freq": mean_top_freq_stats,
+            "max_top_freq": max_top_freq_stats,
         },
     }
 
@@ -343,6 +442,146 @@ def compute_normalized_entropy(dataset: TabularDataset) -> float:
     if num_classes <= 1:
         return 0.0
     return entropy / math.log(num_classes)
+
+
+def compute_numeric_feature_statistics(
+    frame: Optional["pd.DataFrame"],
+    dataset: TabularDataset,
+) -> Dict[str, float]:
+    """Compute aggregate statistics over numeric feature columns for a dataset."""
+    size = estimate_dataset_size(frame, dataset)
+    summary: Dict[str, float] = {
+        "log_dataset_size": math.log1p(max(size, 0)),
+        "mean_of_means": 0.0,
+        "std_of_means": 0.0,
+        "mean_variance": 0.0,
+        "max_variance": 0.0,
+        "mean_skewness": 0.0,
+        "std_skewness": 0.0,
+        "max_kurtosis": 0.0,
+        "mean_std": 0.0,
+        "std_std": 0.0,
+        "max_std": 0.0,
+        "mean_range": 0.0,
+        "max_range": 0.0,
+    }
+    if frame is None or not _HAS_PANDAS or pd is None or frame.empty:
+        return summary
+
+    numeric = frame.select_dtypes(exclude=["object", "category", "bool"])
+    if numeric.empty:
+        return summary
+
+    means = numeric.mean()
+    variances = numeric.var(ddof=0)
+    stds = numeric.std(ddof=0)
+    skewness = numeric.skew()
+    kurtosis = numeric.kurtosis()
+    mins = numeric.min()
+    maxs = numeric.max()
+    ranges = maxs - mins
+
+    summary.update(
+        mean_of_means=_safe_mean(means),
+        std_of_means=_safe_std(means),
+        mean_variance=_safe_mean(variances),
+        max_variance=_safe_max(variances),
+        mean_skewness=_safe_mean(skewness),
+        std_skewness=_safe_std(skewness),
+        max_kurtosis=_safe_max(kurtosis),
+        mean_std=_safe_mean(stds),
+        std_std=_safe_std(stds),
+        max_std=_safe_max(stds),
+        mean_range=_safe_mean(ranges),
+        max_range=_safe_max(ranges),
+    )
+    return summary
+
+
+def estimate_dataset_size(
+    frame: Optional["pd.DataFrame"],
+    dataset: TabularDataset,
+) -> int:
+    if frame is not None:
+        return int(frame.shape[0])
+    total = 0
+    for arr in (dataset.X_train, dataset.X_test):
+        if arr is not None:
+            try:
+                total += int(arr.shape[0])
+            except Exception:
+                continue
+    return total
+
+
+def compute_categorical_feature_statistics(
+    frame: Optional["pd.DataFrame"],
+) -> Dict[str, float]:
+    """Compute aggregate statistics over categorical feature columns for a dataset."""
+    summary: Dict[str, float] = {
+        "mean_cardinality": 0.0,
+        "max_cardinality": 0.0,
+        "mean_cat_entropy": 0.0,
+        "std_cat_entropy": 0.0,
+        "mean_top_freq": 0.0,
+        "max_top_freq": 0.0,
+    }
+    if frame is None or not _HAS_PANDAS or pd is None or frame.empty:
+        return summary
+
+    categorical = frame.select_dtypes(include=["object", "category", "bool"])
+    if categorical.empty:
+        return summary
+
+    cardinality = categorical.nunique(dropna=True)
+    entropy = categorical.apply(_entropy_from_series)
+    top_freq = categorical.apply(_top_frequency_from_series)
+
+    summary.update(
+        mean_cardinality=_safe_mean(cardinality),
+        max_cardinality=_safe_max(cardinality),
+        mean_cat_entropy=_safe_mean(entropy),
+        std_cat_entropy=_safe_std(entropy),
+        mean_top_freq=_safe_mean(top_freq),
+        max_top_freq=_safe_max(top_freq),
+    )
+    return summary
+
+
+def _safe_mean(series: "pd.Series") -> float:
+    values = series.dropna().to_numpy()
+    if values.size == 0:
+        return 0.0
+    return float(np.mean(values))
+
+
+def _safe_std(series: "pd.Series") -> float:
+    values = series.dropna().to_numpy()
+    if values.size == 0:
+        return 0.0
+    return float(np.std(values))
+
+
+def _safe_max(series: "pd.Series") -> float:
+    values = series.dropna().to_numpy()
+    if values.size == 0:
+        return 0.0
+    return float(np.max(values))
+
+
+def _entropy_from_series(series: "pd.Series") -> float:
+    counts = series.value_counts(dropna=True)
+    if counts.empty:
+        return 0.0
+    probs = counts / counts.sum()
+    return float(-np.sum(probs * np.log(probs + 1e-12)))
+
+
+def _top_frequency_from_series(series: "pd.Series") -> float:
+    counts = series.value_counts(dropna=True, normalize=True)
+    if counts.empty:
+        return 0.0
+    return float(counts.iloc[0])
 
 
 def detect_sensitive_attributes(

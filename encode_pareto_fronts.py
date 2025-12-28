@@ -35,6 +35,25 @@ DATASET_META_FIELDS = (
     "categorical_to_numerical_ratio_z",
     "has_sensitive_attributes",
     "high_stakes_domain",
+    "log_dataset_size_z",
+    "mean_of_means_z",
+    "std_of_means_z",
+    "mean_variance_z",
+    "max_variance_z",
+    "mean_skewness_z",
+    "std_skewness_z",
+    "max_kurtosis_z",
+    "mean_std_z",
+    "std_std_z",
+    "max_std_z",
+    "mean_range_z",
+    "max_range_z",
+    "mean_cardinality_z",
+    "max_cardinality_z",
+    "mean_cat_entropy_z",
+    "std_cat_entropy_z",
+    "mean_top_freq_z",
+    "max_top_freq_z",
 )
 
 EXPLAINER_META_FIELDS = (
@@ -61,6 +80,7 @@ NEGATE_METRICS = {
 
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
+    """Parse CLI arguments for encoding Pareto fronts into tabular features."""
     parser = argparse.ArgumentParser(
         description="Encode Pareto-front metrics into feature-rich DataFrames.",
     )
@@ -92,6 +112,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
 
 
 def main(argv: Sequence[str] | None = None) -> None:
+    """Entry point that loads metadata/stats and writes encoded parquet files."""
     args = parse_args(argv)
     dataset_meta = load_dataset_metadata(args.metadata_dir / "dataset_metadata.json")
     explainer_meta = load_explainer_metadata(args.metadata_dir / "explainers_metadata.json")
@@ -117,6 +138,7 @@ def main(argv: Sequence[str] | None = None) -> None:
 
 
 def load_dataset_metadata(path: Path) -> Dict[str, Dict[str, Any]]:
+    """Load dataset metadata JSON and return the `datasets` mapping."""
     data = _load_json(path)
     datasets = data.get("datasets")
     if not isinstance(datasets, Mapping):
@@ -125,6 +147,7 @@ def load_dataset_metadata(path: Path) -> Dict[str, Dict[str, Any]]:
 
 
 def load_explainer_metadata(path: Path) -> Dict[str, Dict[str, Any]]:
+    """Load explainer metadata JSON and return the `explainers` mapping."""
     data = _load_json(path)
     explainers = data.get("explainers")
     if not isinstance(explainers, Mapping):
@@ -133,6 +156,7 @@ def load_explainer_metadata(path: Path) -> Dict[str, Dict[str, Any]]:
 
 
 def load_hyperparameter_config(path: Path) -> Dict[str, Any]:
+    """Load explainer hyperparameter grid config (YAML) into a dict."""
     with path.open("r", encoding="utf-8") as handle:
         return yaml.safe_load(handle) or {}
 
@@ -140,6 +164,7 @@ def load_hyperparameter_config(path: Path) -> Dict[str, Any]:
 def build_hyperparameter_stats(
     config: Mapping[str, Any],
 ) -> Tuple[Dict[str, Dict[str, Dict[str, float]]], List[str]]:
+    """Pre-compute mean/std (plus log-scaling flag) for each explainer hyperparameter."""
     stats: Dict[str, Dict[str, Dict[str, float]]] = {}
     universe: List[str] = []
     explainers_cfg = config.get("explainers") or {}
@@ -181,6 +206,22 @@ def encode_pareto_file(
     hyper_stats: Mapping[str, Mapping[str, Dict[str, float]]],
     hyperparam_universe: Sequence[str],
 ) -> pd.DataFrame:
+    """
+    Convert a single Pareto JSON summary into a feature-rich DataFrame.
+
+    Steps:
+    1) Load dataset/model identifiers from the Pareto payload and validate metadata coverage.
+    2) Pre-compute one-hot templates for all dataset and explainer IDs so every row has the
+       same columns regardless of the active dataset/explainer in the instance.
+    3) For each instance in the payload, iterate through Pareto candidates (method variants):
+         - Parse and sign-flip raw metrics so larger-is-better.
+         - Pull dataset-level meta features and explainer family flags/IDs.
+         - Parse hyperparameters from the method variant name, z-score them within that explainer
+           family, and add applicability indicators for parameters irrelevant to the method.
+         - Accumulate rows containing metadata, hyperparameters, and raw metrics.
+    4) Within each instance, z-normalize metrics across its candidates and emit the completed rows.
+    5) Concatenate all instance rows into a DataFrame to be saved to parquet by the caller.
+    """
     payload = _load_json(path)
     dataset_name = payload.get("dataset")
     model_name = payload.get("model")
@@ -247,6 +288,7 @@ def encode_pareto_file(
 
 
 def transform_metrics(metrics: Mapping[str, Any]) -> Dict[str, Optional[float]]:
+    """Convert metrics to floats and negate lower-is-better metrics."""
     transformed: Dict[str, Optional[float]] = {}
     for key, value in metrics.items():
         numeric = _coerce_float(value)
@@ -261,6 +303,11 @@ def normalize_instance_metrics(
     rows: List[Dict[str, Any]],
     metric_names: Sequence[str],
 ) -> List[Dict[str, Any]]:
+    """
+    Z-normalize metrics across candidates within a single instance.
+    Candidates here include hyperparameter variants of the same method and variants of
+    other methods for that instance, and normalization uses all of them together.
+    """
     if not rows:
         return []
     per_metric_values: Dict[str, List[float]] = {name: [] for name in metric_names}
@@ -303,6 +350,7 @@ def normalize_instance_metrics(
 
 
 def parse_variant_hyperparameters(variant: Optional[str]) -> Dict[str, float]:
+    """Extract numeric hyperparameters from a method_variant string (name-value pairs)."""
     if not variant:
         return {}
     parts = variant.split("__")
@@ -324,6 +372,7 @@ def encode_hyperparameters(
     hyper_stats: Mapping[str, Mapping[str, Dict[str, float]]],
     hyperparam_universe: Sequence[str],
 ) -> Tuple[Dict[str, float], Dict[str, int]]:
+    """Produce z-scored hyperparameter features plus applicability bits for every parameter."""
     features: Dict[str, float] = {}
     applicability: Dict[str, int] = {}
     method_stats = hyper_stats.get(method, {})
@@ -349,6 +398,7 @@ def encode_hyperparameters(
 
 
 def _coerce_float(value: Any) -> Optional[float]:
+    """Best-effort conversion to float; returns None on failure."""
     if value is None:
         return None
     if isinstance(value, (int, float)):
@@ -363,6 +413,7 @@ def _coerce_float(value: Any) -> Optional[float]:
 
 
 def _sorted_unique_ints(values: Iterable[Any]) -> List[int]:
+    """Convert an iterable to a sorted list of unique ints, skipping invalid entries."""
     unique: set[int] = set()
     for value in values:
         try:
@@ -373,6 +424,7 @@ def _sorted_unique_ints(values: Iterable[Any]) -> List[int]:
 
 
 def _load_json(path: Path) -> Dict[str, Any]:
+    """Load JSON file, raising if the file is missing."""
     if not path.exists():
         raise FileNotFoundError(f"Missing required JSON file: {path}")
     with path.open("r", encoding="utf-8") as handle:

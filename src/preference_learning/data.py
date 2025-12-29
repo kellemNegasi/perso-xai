@@ -21,6 +21,40 @@ EXCLUDED_FEATURE_COLUMNS = {
     "method_variant",
 }
 
+STATISTICAL_DATASET_FEATURES = {
+    "dataset_log_dataset_size_z",
+    "dataset_mean_of_means_z",
+    "dataset_std_of_means_z",
+    "dataset_mean_variance_z",
+    "dataset_max_variance_z",
+    "dataset_mean_skewness_z",
+    "dataset_std_skewness_z",
+    "dataset_max_kurtosis_z",
+    "dataset_mean_std_z",
+    "dataset_std_std_z",
+    "dataset_max_std_z",
+    "dataset_mean_range_z",
+    "dataset_max_range_z",
+    "dataset_mean_cardinality_z",
+    "dataset_max_cardinality_z",
+    "dataset_mean_cat_entropy_z",
+    "dataset_std_cat_entropy_z",
+    "dataset_mean_top_freq_z",
+    "dataset_max_top_freq_z",
+}
+
+LANDMARKING_DATASET_FEATURES = {
+    "dataset_landmark_acc_knn1_z",
+    "dataset_landmark_acc_gaussian_nb_z",
+    "dataset_landmark_acc_decision_stump_z",
+    "dataset_landmark_acc_logreg_z",
+}
+
+FEATURE_GROUPS = {
+    "statistical": STATISTICAL_DATASET_FEATURES,
+    "landmarking": LANDMARKING_DATASET_FEATURES,
+}
+
 
 @dataclass
 class InstanceData:
@@ -69,6 +103,7 @@ class PreferenceDatasetBuilder:
         *,
         test_size: float = 0.2,
         random_state: int = 42,
+        excluded_feature_groups: Sequence[str] | None = None,
     ) -> PairwisePreferenceData:
         encoded_df = pd.read_parquet(self.encoded_path)
         if encoded_df.empty:
@@ -79,7 +114,10 @@ class PreferenceDatasetBuilder:
 
         dataset_name = encoded_df["dataset"].iloc[0]
         model_name = encoded_df["model"].iloc[0]
-        feature_columns = _infer_feature_columns(encoded_df)
+        feature_columns = _infer_feature_columns(
+            encoded_df,
+            excluded_feature_groups=excluded_feature_groups,
+        )
 
         instance_ids = encoded_df["instance_index"].unique()
         if len(instance_ids) < 2:
@@ -134,9 +172,24 @@ class PreferenceDatasetBuilder:
         )
 
 
-def _infer_feature_columns(df: pd.DataFrame) -> List[str]:
+def _infer_feature_columns(
+    df: pd.DataFrame,
+    *,
+    excluded_feature_groups: Sequence[str] | None = None,
+) -> List[str]:
     numeric_cols = df.select_dtypes(include=["number", "bool"]).columns.tolist()
-    feature_columns = [col for col in numeric_cols if col not in EXCLUDED_FEATURE_COLUMNS]
+    group_exclusions = set()
+    for group in excluded_feature_groups or []:
+        cols = FEATURE_GROUPS.get(group)
+        if cols is None:
+            LOGGER.warning("Unknown feature group '%s' requested for exclusion; ignoring.", group)
+            continue
+        group_exclusions.update(cols)
+    feature_columns = [
+        col
+        for col in numeric_cols
+        if col not in EXCLUDED_FEATURE_COLUMNS and col not in group_exclusions
+    ]
     if not feature_columns:
         raise ValueError("No numeric feature columns were found in the encoded DataFrame.")
     return feature_columns

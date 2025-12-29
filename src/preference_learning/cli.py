@@ -7,6 +7,7 @@ import json
 from pathlib import Path
 from typing import Sequence
 
+from .data import FEATURE_GROUPS
 from .config import ExperimentConfig
 from .models import LinearSVCConfig
 from .pipeline import (
@@ -84,6 +85,13 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         help="Random seed used for splitting and model training (default: 42).",
     )
     parser.add_argument(
+        "--exclude-feature-groups",
+        nargs="+",
+        choices=tuple(sorted(FEATURE_GROUPS)),
+        default=(),
+        help="Feature groups to drop from model features (default: none).",
+    )
+    parser.add_argument(
         "--top-k",
         nargs="+",
         help="Space-separated list of k values for evaluation (default: 1 3 5).",
@@ -113,6 +121,11 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         help="Regularization strength for LinearSVC (default: 1.0).",
     )
     parser.add_argument(
+        "--tune-svc",
+        action="store_true",
+        help="Tune LinearSVC C via 5-fold cross-validation on the training set (default: off).",
+    )
+    parser.add_argument(
         "--svc-max-iter",
         type=int,
         default=5000,
@@ -134,11 +147,13 @@ def main(argv: Sequence[str] | None = None) -> None:
         num_users=int(args.num_users),
         persona_seed=int(args.persona_seed),
         label_seed=int(args.label_seed),
+        exclude_feature_groups=tuple(args.exclude_feature_groups or ()),
     )
     model_config = LinearSVCConfig(
         C=args.svc_C,
         max_iter=args.svc_max_iter,
         random_state=args.random_state,
+        tune=bool(args.tune_svc),
     )
     if args.persona_config is not None or args.pair_labels_dir is None:
         persona_config_path = args.persona_config or PERSONA_CONFIGS[args.persona]

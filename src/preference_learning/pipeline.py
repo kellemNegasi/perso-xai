@@ -18,10 +18,10 @@ from src.baseline.autoxai_scoring import compute_scores
 
 from .config import ExperimentConfig
 from .data import (
-    EXCLUDED_FEATURE_COLUMNS,
     PairwisePreferenceData,
     PreferenceDatasetBuilder,
     _differences_for_instance,
+    _infer_feature_columns,
 )
 from .evaluation import build_ground_truth_order, evaluate_topk
 from .models import LinearSVCConfig, LinearSVCPreferenceModel
@@ -61,14 +61,22 @@ def run_linear_svc_experiment(
     """Train + evaluate a LinearSVC on pairwise difference features."""
     config = experiment_config or ExperimentConfig()
     builder = PreferenceDatasetBuilder(encoded_path, pair_labels_dir)
-    dataset = builder.build(test_size=config.test_size, random_state=config.random_state)
+    dataset = builder.build(
+        test_size=config.test_size,
+        random_state=config.random_state,
+        excluded_feature_groups=config.exclude_feature_groups,
+    )
     output_root = output_dir or DEFAULT_PROCESSED_DIR
     experiment_dir = output_root / persona / encoded_path.stem.replace("_encoded", "")
     _persist_processed_data(dataset, experiment_dir)
 
     model_conf = model_config or LinearSVCConfig(random_state=config.random_state)
     model = LinearSVCPreferenceModel(model_conf)
-    model.fit(dataset.train_features, dataset.train_labels)
+    tuning_summary = None
+    if getattr(model_conf, "tune", False):
+        tuning_summary = model.tune_and_fit(dataset.train_features, dataset.train_labels)
+    else:
+        model.fit(dataset.train_features, dataset.train_labels)
 
     metrics = _evaluate_model(
         model=model,
@@ -85,10 +93,12 @@ def run_linear_svc_experiment(
         "test_instances": dataset.test_instances,
         "train_rows": int(len(dataset.train_features)),
         "test_instances_evaluated": list(metrics.keys()),
+        "svc_tuning": tuning_summary,
         "experiment_config": {
             "test_size": config.test_size,
             "random_state": config.random_state,
             "top_k": list(config.top_k),
+            "exclude_feature_groups": list(config.exclude_feature_groups),
         },
     }
     (experiment_dir / "metrics.json").write_text(json.dumps(metrics, indent=2))
@@ -115,10 +125,10 @@ def run_persona_linear_svc_simulation(
 
     dataset_name = encoded_df["dataset"].iloc[0]
     model_name = encoded_df["model"].iloc[0]
-    numeric_cols = encoded_df.select_dtypes(include=["number", "bool"]).columns.tolist()
-    feature_columns = [col for col in numeric_cols if col not in EXCLUDED_FEATURE_COLUMNS]
-    if not feature_columns:
-        raise ValueError("No numeric feature columns were found in the encoded DataFrame.")
+    feature_columns = _infer_feature_columns(
+        encoded_df,
+        excluded_feature_groups=config.exclude_feature_groups,
+    )
 
     instance_ids = encoded_df["instance_index"].unique()
     if len(instance_ids) < 2:
@@ -178,7 +188,11 @@ def run_persona_linear_svc_simulation(
 
         model_conf = model_config or LinearSVCConfig(random_state=config.random_state)
         model = LinearSVCPreferenceModel(model_conf)
-        model.fit(X_train, y_train)
+        svc_tuning = None
+        if getattr(model_conf, "tune", False):
+            svc_tuning = model.tune_and_fit(X_train, y_train)
+        else:
+            model.fit(X_train, y_train)
 
         per_instance_topk: list[Dict[str, Dict[str, float]]] = []
         per_instance_autoxai_topk: list[Dict[str, Dict[str, float]]] = []
@@ -244,6 +258,7 @@ def run_persona_linear_svc_simulation(
                 "test_instances_evaluated": int(instances_evaluated),
                 "top_k_mean": user_topk_mean,
                 "svc_top_k_mean": user_topk_mean,
+                "svc_tuning": svc_tuning,
                 "autoxai_top_k_mean": user_autoxai_topk_mean,
             }
         )
@@ -281,6 +296,7 @@ def run_persona_linear_svc_simulation(
             "num_users": config.num_users,
             "persona_seed": config.persona_seed,
             "label_seed": config.label_seed,
+            "exclude_feature_groups": list(config.exclude_feature_groups),
         },
         "config_md5": config_md5,
         "autoxai_baseline": {

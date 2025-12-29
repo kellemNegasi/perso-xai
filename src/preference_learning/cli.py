@@ -115,6 +115,12 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         help="Base seed for sampling pairwise labels in simulation mode (default: 41).",
     )
     parser.add_argument(
+        "--tau",
+        type=float,
+        default=None,
+        help="Optional override for preference-sampling temperature tau (default: persona config).",
+    )
+    parser.add_argument(
         "--svc-C",
         type=float,
         default=1.0,
@@ -147,6 +153,7 @@ def main(argv: Sequence[str] | None = None) -> None:
         num_users=int(args.num_users),
         persona_seed=int(args.persona_seed),
         label_seed=int(args.label_seed),
+        tau=float(args.tau) if args.tau is not None else None,
         exclude_feature_groups=tuple(args.exclude_feature_groups or ()),
     )
     model_config = LinearSVCConfig(

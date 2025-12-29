@@ -158,6 +158,7 @@ def run_persona_linear_svc_simulation(
         user = HierarchicalDirichletUser(
             persona_config,
             seed=config.persona_seed + user_idx,
+            tau=config.tau,
         )
         ranker = PersonaPairwiseRanker(
             user=user,
@@ -288,6 +289,7 @@ def run_persona_linear_svc_simulation(
         "persona_sampling": {
             "metric_order": list(persona_config.metric_names()),
             "default_tau": float(persona_config.tau) if persona_config.tau is not None else None,
+            "tau_override": float(config.tau) if config.tau is not None else None,
         },
         "experiment_config": {
             "test_size": config.test_size,
@@ -296,6 +298,7 @@ def run_persona_linear_svc_simulation(
             "num_users": config.num_users,
             "persona_seed": config.persona_seed,
             "label_seed": config.label_seed,
+            "tau": float(config.tau) if config.tau is not None else None,
             "exclude_feature_groups": list(config.exclude_feature_groups),
         },
         "config_md5": config_md5,

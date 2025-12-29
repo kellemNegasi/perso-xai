@@ -1,9 +1,7 @@
 #!/usr/bin/env bash
 python3 -m src.preference_learning.run_all \
   --encoded-dir results/full_run_dec8/encoded_pareto_fronts/features_full_lm_stats \
-  --output-dir results/full_run_dec8/preference_learning_simulation/basic_features/tuned-svc-best_tau \
   --personas layperson regulator clinician \
   --exclude-feature-groups statistical landmarking \
-  --tune-svc \
-  --num-users 10 \
-  --tau 0.01
+  --tau-results-dir results/full_run_dec8/preference_learning_simulation/basic_features/untuned-svc/tau_tuning \
+  --tau-values 0.01 0.03 0.05 0.1 0.2

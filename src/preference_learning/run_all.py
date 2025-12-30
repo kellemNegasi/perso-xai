@@ -16,6 +16,9 @@ DEFAULT_RESULTS_ROOT = Path("results") / "full_run_dec8"
 DEFAULT_ENCODED_DIR = DEFAULT_RESULTS_ROOT / "encoded_pareto_fronts" / "features_full_lm_stats"
 DEFAULT_OUTPUT_DIR = DEFAULT_RESULTS_ROOT / "preference_learning"
 DEFAULT_TAU_RESULTS_DIR = Path("preference-learning-simulation") / "basic-features" / "tau-tunning-results"
+DEFAULT_NUM_USERS_RESULTS_DIR = (
+    Path("preference-learning-simulation") / "basic-features" / "num-users-sweep-results"
+)
 DEFAULT_PERSONA_CONFIG_DIR = Path("src") / "preference_learning" / "configs"
 PERSONA_CONFIGS = {
     "layperson": DEFAULT_PERSONA_CONFIG_DIR / "lay-person.json",
@@ -77,6 +80,21 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         type=int,
         default=10,
         help="Number of sampled users per persona (default: 10).",
+    )
+    parser.add_argument(
+        "--num-users-values",
+        nargs="+",
+        default=None,
+        help=(
+            "Optional space-separated list of num_users values to sweep. When set, runs every experiment for each "
+            "value and writes aggregated Spearman correlations to --num-users-results-dir."
+        ),
+    )
+    parser.add_argument(
+        "--num-users-results-dir",
+        type=Path,
+        default=DEFAULT_NUM_USERS_RESULTS_DIR,
+        help=f"Output directory for num-users sweep summaries (default: {DEFAULT_NUM_USERS_RESULTS_DIR}).",
     )
     parser.add_argument(
         "--persona-seed",
@@ -166,6 +184,29 @@ def _parse_tau_values(values: Iterable[str] | None) -> Sequence[float]:
     return tuple(ordered)
 
 
+def _parse_num_users_values(values: Iterable[str] | None) -> Sequence[int]:
+    if not values:
+        return ()
+    parsed: list[int] = []
+    for value in values:
+        try:
+            parsed_value = int(value)
+        except ValueError as exc:  # pragma: no cover - argument parsing
+            raise argparse.ArgumentTypeError(f"Invalid integer for --num-users-values: {value}") from exc
+        if parsed_value < 1:
+            raise argparse.ArgumentTypeError("--num-users-values must all be >= 1.")
+        parsed.append(parsed_value)
+    # De-duplicate while preserving order
+    seen: set[int] = set()
+    ordered: list[int] = []
+    for num_users in parsed:
+        if num_users in seen:
+            continue
+        ordered.append(num_users)
+        seen.add(num_users)
+    return tuple(ordered)
+
+
 def _extract_aggregate_spearman(
     simulation_result: dict,
     *,
@@ -201,6 +242,9 @@ def main(argv: Sequence[str] | None = None) -> None:
         raise FileNotFoundError(f"No encoded parquet files found under {encoded_dir}")
     top_k = parse_top_k(args.top_k)
     tau_values = _parse_tau_values(args.tau_values)
+    num_users_values = _parse_num_users_values(args.num_users_values)
+    if tau_values and num_users_values:
+        raise argparse.ArgumentTypeError("Set at most one of --tau-values or --num-users-values.")
 
     experiment_config = ExperimentConfig(
         test_size=args.test_size,
@@ -282,6 +326,76 @@ def main(argv: Sequence[str] | None = None) -> None:
         for row in sorted(results_per_tau, key=lambda r: r["tau"]):
             csv_lines.append(f"{row['tau']},{row['aggregate_spearman']},{row['n_values']}")
         (output_dir / "tau_tunning_summary.csv").write_text("\n".join(csv_lines) + "\n")
+        print(json.dumps(summary, indent=2))
+        return
+
+    if num_users_values:
+        results_per_num_users: list[dict] = []
+        for num_users in num_users_values:
+            sweep_config = ExperimentConfig(
+                test_size=experiment_config.test_size,
+                random_state=experiment_config.random_state,
+                top_k=experiment_config.top_k,
+                num_users=int(num_users),
+                persona_seed=experiment_config.persona_seed,
+                label_seed=experiment_config.label_seed,
+                tau=experiment_config.tau,
+                exclude_feature_groups=experiment_config.exclude_feature_groups,
+            )
+            spearman_values: list[float] = []
+            for persona in args.personas:
+                persona_config_path = PERSONA_CONFIGS[persona]
+                for encoded_path in encoded_files:
+                    print(f"Running num_users={num_users} {persona} experiment for {encoded_path.name}")
+                    result = run_persona_linear_svc_simulation(
+                        encoded_path=encoded_path,
+                        persona_config_path=persona_config_path,
+                        output_dir=None,
+                        experiment_config=sweep_config,
+                        model_config=model_config,
+                    )
+                    spearman_values.extend(_extract_aggregate_spearman(result, k_values=sweep_config.top_k))
+
+            results_per_num_users.append(
+                {
+                    "num_users": int(num_users),
+                    "aggregate_spearman": _mean(spearman_values),
+                    "n_values": int(len(spearman_values)),
+                }
+            )
+
+        best = (
+            max(results_per_num_users, key=lambda row: row["aggregate_spearman"])
+            if results_per_num_users
+            else None
+        )
+        output_dir = Path(args.num_users_results_dir)
+        output_dir.mkdir(parents=True, exist_ok=True)
+        summary = {
+            "encoded_dir": str(encoded_dir),
+            "personas": list(args.personas),
+            "top_k": list(top_k),
+            "persona_seed": int(experiment_config.persona_seed),
+            "label_seed": int(experiment_config.label_seed),
+            "tau": float(experiment_config.tau) if experiment_config.tau is not None else None,
+            "exclude_feature_groups": list(experiment_config.exclude_feature_groups),
+            "svc_config": {
+                "C": float(model_config.C),
+                "max_iter": int(model_config.max_iter),
+                "random_state": int(model_config.random_state),
+                "tune": bool(model_config.tune),
+            },
+            "num_users_values": [int(v) for v in num_users_values],
+            "results": results_per_num_users,
+            "best_num_users": best["num_users"] if best is not None else None,
+            "best_aggregate_spearman": best["aggregate_spearman"] if best is not None else None,
+            "aggregation": "Mean of aggregate_top_k_mean[k]['rank_correlation.spearman'] across all runs.",
+        }
+        (output_dir / "num_users_sweep_summary.json").write_text(json.dumps(summary, indent=2))
+        csv_lines = ["num_users,aggregate_spearman,n_values"]
+        for row in sorted(results_per_num_users, key=lambda r: r["num_users"]):
+            csv_lines.append(f"{row['num_users']},{row['aggregate_spearman']},{row['n_values']}")
+        (output_dir / "num_users_sweep_summary.csv").write_text("\n".join(csv_lines) + "\n")
         print(json.dumps(summary, indent=2))
         return
 

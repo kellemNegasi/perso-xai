@@ -23,7 +23,7 @@ from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 import pandas as pd
 import yaml
 
-DEFAULT_RESULTS_ROOT = Path("results") / "full_run_dec8"
+DEFAULT_RESULTS_ROOT = Path("results") / "hc_combo_20251228_050331"
 DEFAULT_PARETO_DIR = DEFAULT_RESULTS_ROOT / "pareto_fronts"
 DEFAULT_METADATA_DIR = DEFAULT_RESULTS_ROOT / "metadata"
 DEFAULT_OUTPUT_DIR = DEFAULT_RESULTS_ROOT / "encoded_pareto_fronts" / "features_full_lm_stats"
@@ -245,6 +245,12 @@ def encode_pareto_file(
     for instance in instances:
         rows: List[Dict[str, Any]] = []
         pareto_metrics: List[str] = list(instance.get("pareto_metrics") or [])
+        # In case pareto_metrics is missing, infer from the first entry.
+        if not pareto_metrics:
+            pareto_metrics = sorted({
+                k for entry in (instance.get("pareto_front") or [])
+                for k in (entry.get("metrics") or {}).keys()
+            })
         for entry in instance.get("pareto_front") or []:
             method = entry.get("method")
             if method not in explainer_meta:
@@ -293,14 +299,10 @@ def encode_pareto_file(
 
 
 def transform_metrics(metrics: Mapping[str, Any]) -> Dict[str, Optional[float]]:
-    """Convert metrics to floats and negate lower-is-better metrics."""
+    """Convert metrics to floats."""
     transformed: Dict[str, Optional[float]] = {}
     for key, value in metrics.items():
-        numeric = _coerce_float(value)
-        if numeric is None:
-            transformed[key] = None
-            continue
-        transformed[key] = -numeric if key in NEGATE_METRICS else numeric
+        transformed[key] = _coerce_float(value)
     return transformed
 
 
@@ -347,7 +349,7 @@ def normalize_instance_metrics(
             value = row_metrics.get(metric)
             mean, std = stats.get(metric, (0.0, 0.0))
             if value is None or std == 0.0:
-                row[metric] = 0.0 if std != 0.0 else 0.0
+                row[metric] = 0.0
             else:
                 row[metric] = (value - mean) / std
         encoded_rows.append(row)

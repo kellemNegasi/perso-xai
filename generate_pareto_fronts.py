@@ -46,6 +46,15 @@ DEFAULT_METHODS = (
     "shap",
 )
 
+MINIMIZE_METRICS = {
+    "infidelity",
+    "non_sensitivity_violation_fraction",
+    "non_sensitivity_delta_mean",
+    "relative_input_stability",
+    "covariate_complexity",
+}
+
+
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
@@ -233,9 +242,15 @@ def clean_metrics(raw_metrics: Dict[str, Any] | None) -> Dict[str, float]:
         if key in IGNORED_METRICS:
             continue
         try:
-            cleaned[key] = float(value)
+            val = float(value)
         except (TypeError, ValueError):
             continue
+
+        # Convert minimize objectives to "maximize" by negating.
+        if key in MINIMIZE_METRICS:
+            val = -val
+
+        cleaned[key] = val
     return cleaned
 
 

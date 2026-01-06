@@ -289,6 +289,7 @@ class HierarchicalDirichletUser:
         seed: int | None = None,
         tau: float | None = None,
         negate_metrics: Iterable[str] = DEFAULT_NEGATE_METRICS,
+        metrics_already_oriented: bool = False,
     ) -> None:
         resolved_tau = float(DEFAULT_TAU if tau is None else tau)
         if config.tau is not None and tau is None:
@@ -297,7 +298,7 @@ class HierarchicalDirichletUser:
             raise ValueError("tau must be > 0.")
         self.config = config
         self.tau = float(resolved_tau)
-        self.negate_metrics = frozenset(negate_metrics)
+        self.negate_metrics = frozenset() if metrics_already_oriented else frozenset(negate_metrics)
         self._rng = np.random.default_rng(seed)
         self.metric_order: tuple[str, ...] = tuple(config.metric_names())
         self.metric_weights: Dict[str, float] = {}

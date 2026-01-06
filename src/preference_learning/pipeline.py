@@ -233,6 +233,8 @@ def run_persona_linear_svc_simulation(
                         objective=autoxai_objective,
                         scaling="Std",
                         scaling_scope="instance",
+                        # Pareto-front metrics are already oriented as "higher is better".
+                        apply_direction=False,
                     )
                     predicted = {
                         score.method_variant: float(score.aggregated_score)

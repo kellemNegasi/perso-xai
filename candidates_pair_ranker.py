@@ -116,6 +116,8 @@ def main(argv: Sequence[str] | None = None) -> None:
         persona_config,
         seed=args.persona_seed,
         tau=args.tau,
+        # Pareto-front metrics are already oriented as "higher is better" (min objectives are negated).
+        metrics_already_oriented=True,
     )
     label_rng = np.random.default_rng(args.label_seed)
 

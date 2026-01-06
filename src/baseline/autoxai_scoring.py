@@ -16,6 +16,7 @@ def compute_scores(
     scaling: str = "Std",
     scaling_scope: str = "trial",
     trial_history_for_scaling: Optional[Sequence[str]] = None,
+    apply_direction: bool = True,
 ) -> List[CandidateScore]:
     """
     Produces AutoXAI-style standardized + weighted aggregated scores.
@@ -31,6 +32,11 @@ def compute_scores(
       When scaling_scope="trial", optionally provide the sequence of evaluated trial variants to fit
       the scalers on (supports duplicates). This matches AutoXAI's sequential scaling behaviour for
       random/BO runs where scaling only uses the evaluated trial history.
+
+    apply_direction:
+      When True (default), applies each ObjectiveTerm's direction ("min" terms are negated) so that
+      all terms are maximized. Set False when the upstream metrics are already oriented (e.g. Pareto
+      files that already negated lower-is-better metrics).
     """
 
     if scaling not in {"Std", "MinMax"}:
@@ -51,7 +57,7 @@ def compute_scores(
                 if value is None:
                     missing = True
                     break
-                term_values[term.name] = term.apply_direction(value)
+                term_values[term.name] = term.apply_direction(value) if apply_direction else float(value)
             if missing:
                 continue
             method = variant_to_method.get(variant, "unknown")
@@ -180,6 +186,7 @@ def compute_variant_term_means(
     *,
     candidate_metrics: Mapping[int, Mapping[str, Mapping[str, float]]],
     objective: Sequence[ObjectiveTerm],
+    apply_direction: bool = True,
 ) -> Tuple[Dict[str, Dict[str, float]], Dict[str, int]]:
     """
     Compute per-variant mean objective-term values over instances.
@@ -200,7 +207,7 @@ def compute_variant_term_means(
                 if value is None:
                     term_values = {}
                     break
-                term_values[term.name] = term.apply_direction(value)
+                term_values[term.name] = term.apply_direction(value) if apply_direction else float(value)
             if not term_values:
                 continue
 
@@ -350,4 +357,3 @@ def compute_mean_score_by_variant(
         if count:
             means[variant] = (variant_method.get(variant, "unknown"), total / count)
     return means
-

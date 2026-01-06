@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Dict, Iterable, Mapping, MutableMapping, Sequence
 
 import numpy as np
+import yaml
 
 # Metrics where "lower is better" in raw form; we flip sign to align with utility maximisation.
 DEFAULT_NEGATE_METRICS: frozenset[str] = frozenset(
@@ -31,12 +32,20 @@ DEFAULT_NEGATE_METRICS: frozenset[str] = frozenset(
 )
 
 DEFAULT_TAU: float = 0.05
+DEFAULT_PREFERENCE_MODEL_PATH: Path = (
+    Path(__file__).resolve().parent / "configs" / "preference_model.yml"
+)
+DEFAULT_METRIC_LEVEL_LAMBDA: float = 0.5
+MIN_DIRICHLET_CONCENTRATION: float = 1e-6
+
+_PREFERENCE_MODEL_CACHE: dict[Path, Mapping[str, object] | None] = {}
 
 
 @dataclass(frozen=True)
 class MetricGroupConfig:
     name: str
-    alpha: float
+    alpha: float | None
+    preference: float | None
     metrics: Mapping[str, float]
 
     def metric_names(self) -> Sequence[str]:
@@ -92,9 +101,30 @@ class PersonaConfig:
             if not isinstance(group_payload, Mapping):
                 continue
             alpha = group_payload.get("alpha")
+            preference = group_payload.get("preference")
             metrics = group_payload.get("metrics")
-            if not isinstance(alpha, (int, float)) or alpha <= 0:
+
+            parsed_alpha: float | None
+            if alpha is None:
+                parsed_alpha = None
+            elif isinstance(alpha, (int, float)) and float(alpha) > 0:
+                parsed_alpha = float(alpha)
+            else:
                 raise ValueError(f"Group '{group_name}' has invalid alpha={alpha!r}.")
+
+            parsed_preference: float | None
+            if preference is None:
+                parsed_preference = None
+            elif isinstance(preference, (int, float)) and float(preference) > 0:
+                parsed_preference = float(preference)
+            else:
+                raise ValueError(f"Group '{group_name}' has invalid preference={preference!r}.")
+
+            if parsed_alpha is None and parsed_preference is None:
+                raise ValueError(
+                    f"Group '{group_name}' must define either a positive 'alpha' (legacy) or 'preference' rating."
+                )
+
             if not isinstance(metrics, Mapping) or not metrics:
                 raise ValueError(f"Group '{group_name}' has no metrics mapping.")
             metric_alphas: Dict[str, float] = {}
@@ -111,7 +141,8 @@ class PersonaConfig:
             groups.append(
                 MetricGroupConfig(
                     name=group_name,
-                    alpha=float(alpha),
+                    alpha=parsed_alpha,
+                    preference=parsed_preference,
                     metrics=metric_alphas,
                 )
             )
@@ -156,6 +187,70 @@ def z_normalize_matrix(values: np.ndarray) -> np.ndarray:
     return np.nan_to_num(z, nan=0.0, posinf=0.0, neginf=0.0)
 
 
+def _normalize_positive(scores: Sequence[float], *, label: str) -> np.ndarray:
+    arr = np.asarray(list(scores), dtype=float)
+    if arr.size == 0:
+        raise ValueError(f"{label} scores must be non-empty.")
+    if not np.all(np.isfinite(arr)) or np.any(arr <= 0):
+        raise ValueError(f"{label} scores must be finite and > 0. Got: {arr!r}")
+    total = float(arr.sum())
+    if total <= 0:
+        raise ValueError(f"{label} scores sum must be > 0.")
+    return arr / total
+
+
+def _load_preference_model_payload(path: Path = DEFAULT_PREFERENCE_MODEL_PATH) -> Mapping[str, object] | None:
+    cached = _PREFERENCE_MODEL_CACHE.get(path)
+    if cached is not None or path in _PREFERENCE_MODEL_CACHE:
+        return cached
+    try:
+        raw = yaml.safe_load(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        _PREFERENCE_MODEL_CACHE[path] = None
+        return None
+    if not isinstance(raw, Mapping):
+        _PREFERENCE_MODEL_CACHE[path] = None
+        return None
+    payload = raw.get("preference_model")
+    if not isinstance(payload, Mapping):
+        _PREFERENCE_MODEL_CACHE[path] = None
+        return None
+    _PREFERENCE_MODEL_CACHE[path] = payload
+    return payload
+
+
+def _lookup_metric_level_lambda(payload: Mapping[str, object] | None) -> float:
+    if payload is None:
+        return DEFAULT_METRIC_LEVEL_LAMBDA
+    concentration = payload.get("concentration")
+    if not isinstance(concentration, Mapping):
+        return DEFAULT_METRIC_LEVEL_LAMBDA
+    metric_level = concentration.get("metric_level")
+    if not isinstance(metric_level, Mapping):
+        return DEFAULT_METRIC_LEVEL_LAMBDA
+    lam = metric_level.get("lambda")
+    if isinstance(lam, (int, float)) and float(lam) > 0:
+        return float(lam)
+    return DEFAULT_METRIC_LEVEL_LAMBDA
+
+
+def _lookup_concentration_c(payload: Mapping[str, object] | None, persona: str) -> float:
+    if payload is None:
+        raise ValueError(f"Missing preference model config at {DEFAULT_PREFERENCE_MODEL_PATH}.")
+    concentration = payload.get("concentration")
+    if not isinstance(concentration, Mapping):
+        raise ValueError("preference_model.concentration must be a mapping.")
+    fixed = concentration.get("fixed")
+    if not isinstance(fixed, Mapping):
+        raise ValueError("preference_model.concentration.fixed must be a mapping.")
+    value = fixed.get(persona)
+    if not isinstance(value, (int, float)) or float(value) <= 0:
+        raise ValueError(
+            f"preference_model.concentration.fixed is missing a positive value for persona={persona!r}."
+        )
+    return float(max(float(value), MIN_DIRICHLET_CONCENTRATION))
+
+
 class HierarchicalDirichletUser:
     """
     Hierarchical persona that samples a two-level Dirichlet over metrics and then stays fixed.
@@ -178,7 +273,7 @@ class HierarchicalDirichletUser:
     Parameters
     ----------
     config : PersonaConfig
-        Parsed persona definition containing group/metric alphas and optional tau override.
+        Parsed persona definition containing either group/metric alphas (legacy) or 1–5 preference ratings.
     seed : int | None, optional
         RNG seed for reproducible weight sampling; if None, uses a nondeterministic seed.
     tau : float | None, optional
@@ -222,14 +317,43 @@ class HierarchicalDirichletUser:
     def resample_weights(self) -> None:
         """(Re)sample hierarchical Dirichlet weights and cache as a metric vector."""
         groups = list(self.config.groups)
-        group_alphas = np.asarray([group.alpha for group in groups], dtype=float)
-        group_weights = self._rng.dirichlet(group_alphas)
-        self.group_weights = {group.name: float(w) for group, w in zip(groups, group_weights)}
+        uses_preferences = any(group.preference is not None for group in groups)
+        uses_alphas = any(group.alpha is not None for group in groups)
+        if uses_preferences and uses_alphas:
+            raise ValueError("Persona config mixes 'alpha' and 'preference' groups; choose one scheme.")
+
+        if uses_preferences:
+            group_scores = [float(group.preference) for group in groups if group.preference is not None]
+            if len(group_scores) != len(groups):
+                raise ValueError("Persona config is missing group 'preference' ratings for some groups.")
+            w0_group = _normalize_positive(group_scores, label="Group preference")
+            model_payload = _load_preference_model_payload()
+            c = _lookup_concentration_c(model_payload, self.config.persona)
+            group_alphas = np.maximum(c * w0_group, MIN_DIRICHLET_CONCENTRATION)
+            group_weights = self._rng.dirichlet(group_alphas)
+            self.group_weights = {group.name: float(w) for group, w in zip(groups, group_weights)}
+            metric_lambda = _lookup_metric_level_lambda(model_payload)
+            metric_concentration = float(max(metric_lambda * c, MIN_DIRICHLET_CONCENTRATION))
+        else:
+            group_alphas = np.asarray(
+                [float(group.alpha) for group in groups if group.alpha is not None],
+                dtype=float,
+            )
+            group_weights = self._rng.dirichlet(group_alphas)
+            self.group_weights = {group.name: float(w) for group, w in zip(groups, group_weights)}
+            metric_concentration = 0.0
 
         metric_weights: MutableMapping[str, float] = {}
         for group, group_w in zip(groups, group_weights):
             metric_names = list(group.metrics.keys())
-            metric_alphas = np.asarray([group.metrics[name] for name in metric_names], dtype=float)
+            if uses_preferences:
+                v0 = _normalize_positive(
+                    [float(group.metrics[name]) for name in metric_names],
+                    label=f"Metric preference for group '{group.name}'",
+                )
+                metric_alphas = np.maximum(metric_concentration * v0, MIN_DIRICHLET_CONCENTRATION)
+            else:
+                metric_alphas = np.asarray([group.metrics[name] for name in metric_names], dtype=float)
             within = self._rng.dirichlet(metric_alphas)
             for metric_name, metric_w in zip(metric_names, within):
                 metric_weights[metric_name] = metric_weights.get(metric_name, 0.0) + float(

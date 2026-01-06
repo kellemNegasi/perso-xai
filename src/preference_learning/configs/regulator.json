@@ -2,50 +2,52 @@
   "persona": "regulator",
   "type": "hierarchical_dirichlet",
   "tau": 0.05,
-  "description": "Regulatory or expert user prioritizing faithfulness, robustness, and auditability over simplicity.",
+  "description": "Regulatory/audit user prioritizing very high validity (audit defensibility), high reliability (robustness/consistency across cases), medium parsimony/interpretability (accepts complexity if it improves audit strength), high comparative 'why-not' insight (contestability/procedural fairness/recourse framing), and medium–high uncertainty communication (risk disclosure, robustness, calibration concerns).",
   "groups": {
-    "faithfulness": {
-      "alpha": 12,
+    "validity": {
+      "preference": 5,
       "metrics": {
-        "correctness": 6,
-        "infidelity": 4,
-        "completeness_score": 3,
-        "monotonicity": 2
+        "correctness": 5,
+        "infidelity": 5,
+        "monotonicity": 5,
+        "non_sensitivity_violation_fraction": 5,
+        "non_sensitivity_safe_fraction": 5,
+        "non_sensitivity_zero_features": 5,
+        "non_sensitivity_delta_mean": 5,
+        "completeness_drop": 5,
+        "completeness_random_drop": 5,
+        "completeness_score": 5
       }
     },
-    "robustness": {
-      "alpha": 9,
+    "reliability": {
+      "preference": 4,
       "metrics": {
-        "relative_input_stability": 4,
-        "continuity": 3,
-        "consistency": 3,
-        "non_sensitivity_delta_mean": 2,
-        "non_sensitivity_safe_fraction": 2,
-        "non_sensitivity_violation_fraction": 2,
-        "non_sensitivity_zero_features": 1
+        "consistency": 4,
+        "relative_input_stability": 4
       }
     },
-    "structure_confidence": {
-      "alpha": 4,
+    "parsimony_interpretability": {
+      "preference": 3,
       "metrics": {
         "covariate_complexity": 3,
         "covariate_regularity": 3,
-        "confidence": 2
+        "compactness_sparsity": 3,
+        "compactness_top5_coverage": 3,
+        "compactness_top10_coverage": 3,
+        "compactness_effective_features": 3
       }
     },
-    "compactness": {
-      "alpha": 2,
+    "comparative_why_not_insight": {
+      "preference": 4,
       "metrics": {
-        "compactness_effective_features": 3,
-        "compactness_sparsity": 2,
-        "compactness_top5_coverage": 2,
-        "compactness_top10_coverage": 1
+        "contrastivity": 4,
+        "contrastivity_pairs": 4
       }
     },
-    "contrastivity": {
-      "alpha": 2,
+    "uncertainty_communication": {
+      "preference": 3,
       "metrics": {
-        "contrastivity": 1
+        "confidence": 3
       }
     }
   }

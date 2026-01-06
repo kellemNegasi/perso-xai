@@ -1,0 +1,25 @@
+preference_model:
+  type: hierarchical_dirichlet
+  description: >
+    Preferences are sampled hierarchically using Dirichlet distributions.
+    Mean preferences are derived from ordinal persona priorities; concentration
+    (c) is treated as a confidence knob and swept in experiments.
+
+  concentration:
+    mode: fixed_and_sweep
+    fixed:
+      clinician: 50
+      regulator: 50
+      lay: 50
+    sweep:
+      enabled: true
+      values: [1, 5, 10, 20, 50, 100, 200]
+    metric_level:
+      lambda: 1
+      note: "Metric-level concentration d_g = lambda * c."
+
+  mean_preference_w0:
+    note: >
+      Compute w0 by normalizing ordinal scores:
+        w0_i = s_i / sum_j s_j
+      where s_i are persona/group scores on the 1–5 scale.

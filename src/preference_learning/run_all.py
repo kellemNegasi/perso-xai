@@ -27,8 +27,11 @@ PERSONA_CONFIGS = {
     "layperson": DEFAULT_PERSONA_CONFIG_DIR / "lay.yaml",
     "regulator": DEFAULT_PERSONA_CONFIG_DIR / "regulator.yaml",
     "clinician": DEFAULT_PERSONA_CONFIG_DIR / "clinician.yaml",
+    "auto-xai-persona": DEFAULT_PERSONA_CONFIG_DIR / "auto-xai-persona.yaml",
 }
 PERSONAS = tuple(sorted(PERSONA_CONFIGS))
+EXPERIMENT_MODES = ("preference-only", "autoxai-comparison")
+AUTOXAI_METRIC_MODES = ("auto-xai", "all-metrics")
 
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
@@ -48,11 +51,33 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         help=f"Directory where experiment artifacts will be stored (default: {DEFAULT_OUTPUT_DIR}).",
     )
     parser.add_argument(
+        "--experiment-mode",
+        choices=EXPERIMENT_MODES,
+        default="preference-only",
+        help=(
+            "Experiment mode controlling persona selection and AutoXAI settings. "
+            "'autoxai-comparison' uses only auto-xai-persona; "
+            "'preference-only' uses all personas."
+        ),
+    )
+    parser.add_argument(
+        "--autoxai-metric-mode",
+        choices=AUTOXAI_METRIC_MODES,
+        default="auto-xai",
+        help=(
+            "AutoXAI objective to use in comparison mode: 'auto-xai' uses the paper's metric set, "
+            "while 'all-metrics' expands to all available Pareto metrics."
+        ),
+    )
+    parser.add_argument(
         "--personas",
         nargs="+",
         choices=PERSONAS,
         default=list(PERSONAS),
-        help="Personas to evaluate (default: layperson regulator).",
+        help=(
+            "Personas to evaluate (ignored when --experiment-mode is autoxai-comparison; "
+            "preference-only always uses all personas)."
+        ),
     )
     parser.add_argument(
         "--test-size",
@@ -267,6 +292,13 @@ def _parse_concentration_values(values: Iterable[str] | None) -> Sequence[float]
     return tuple(ordered)
 
 
+def _resolve_experiment_mode(args: argparse.Namespace) -> tuple[list[str], bool]:
+    if args.experiment_mode == "autoxai-comparison":
+        include_all_metrics = args.autoxai_metric_mode == "all-metrics"
+        return ["auto-xai-persona"], include_all_metrics
+    return list(PERSONAS), bool(args.autoxai_include_all_metrics)
+
+
 def _extract_aggregate_metric(
     simulation_result: dict,
     *,
@@ -335,6 +367,7 @@ def main(argv: Sequence[str] | None = None) -> None:
             "Set at most one of --tau-values, --num-users-values, or --concentration-c-values."
         )
 
+    personas, autoxai_include_all_metrics = _resolve_experiment_mode(args)
     experiment_config = ExperimentConfig(
         test_size=args.test_size,
         random_state=args.random_state,
@@ -345,7 +378,7 @@ def main(argv: Sequence[str] | None = None) -> None:
         tau=float(args.tau) if args.tau is not None else None,
         concentration_c=float(args.concentration_c) if args.concentration_c is not None else None,
         exclude_feature_groups=tuple(args.exclude_feature_groups or ()),
-        autoxai_include_all_metrics=bool(args.autoxai_include_all_metrics),
+        autoxai_include_all_metrics=autoxai_include_all_metrics,
     )
     model_config = LinearSVCConfig(
         C=args.svc_C,
@@ -370,7 +403,7 @@ def main(argv: Sequence[str] | None = None) -> None:
                 autoxai_include_all_metrics=experiment_config.autoxai_include_all_metrics,
             )
             spearman_values: list[float] = []
-            for persona in args.personas:
+            for persona in personas:
                 persona_config_path = PERSONA_CONFIGS[persona]
                 for encoded_path in encoded_files:
                     print(f"Running tau={tau} {persona} experiment for {encoded_path.name}")
@@ -396,12 +429,14 @@ def main(argv: Sequence[str] | None = None) -> None:
         output_dir.mkdir(parents=True, exist_ok=True)
         summary = {
             "encoded_dir": str(encoded_dir),
-            "personas": list(args.personas),
+            "experiment_mode": args.experiment_mode,
+            "personas": list(personas),
             "top_k": list(top_k),
             "num_users": int(experiment_config.num_users),
             "persona_seed": int(experiment_config.persona_seed),
             "label_seed": int(experiment_config.label_seed),
             "exclude_feature_groups": list(experiment_config.exclude_feature_groups),
+            "autoxai_include_all_metrics": bool(experiment_config.autoxai_include_all_metrics),
             "svc_config": {
                 "C": float(model_config.C),
                 "max_iter": int(model_config.max_iter),
@@ -438,7 +473,7 @@ def main(argv: Sequence[str] | None = None) -> None:
                 autoxai_include_all_metrics=experiment_config.autoxai_include_all_metrics,
             )
             spearman_values: list[float] = []
-            for persona in args.personas:
+            for persona in personas:
                 persona_config_path = PERSONA_CONFIGS[persona]
                 for encoded_path in encoded_files:
                     print(f"Running num_users={num_users} {persona} experiment for {encoded_path.name}")
@@ -468,12 +503,14 @@ def main(argv: Sequence[str] | None = None) -> None:
         output_dir.mkdir(parents=True, exist_ok=True)
         summary = {
             "encoded_dir": str(encoded_dir),
-            "personas": list(args.personas),
+            "experiment_mode": args.experiment_mode,
+            "personas": list(personas),
             "top_k": list(top_k),
             "persona_seed": int(experiment_config.persona_seed),
             "label_seed": int(experiment_config.label_seed),
             "tau": float(experiment_config.tau) if experiment_config.tau is not None else None,
             "exclude_feature_groups": list(experiment_config.exclude_feature_groups),
+            "autoxai_include_all_metrics": bool(experiment_config.autoxai_include_all_metrics),
             "svc_config": {
                 "C": float(model_config.C),
                 "max_iter": int(model_config.max_iter),
@@ -513,7 +550,7 @@ def main(argv: Sequence[str] | None = None) -> None:
             svc_precision_values: list[float] = []
             autoxai_spearman_values: list[float] = []
             autoxai_precision_values: list[float] = []
-            for persona in args.personas:
+            for persona in personas:
                 persona_config_path = PERSONA_CONFIGS[persona]
                 for encoded_path in encoded_files:
                     print(
@@ -581,13 +618,15 @@ def main(argv: Sequence[str] | None = None) -> None:
         output_dir.mkdir(parents=True, exist_ok=True)
         summary = {
             "encoded_dir": str(encoded_dir),
-            "personas": list(args.personas),
+            "experiment_mode": args.experiment_mode,
+            "personas": list(personas),
             "top_k": list(top_k),
             "num_users": int(experiment_config.num_users),
             "persona_seed": int(experiment_config.persona_seed),
             "label_seed": int(experiment_config.label_seed),
             "tau": float(experiment_config.tau) if experiment_config.tau is not None else None,
             "exclude_feature_groups": list(experiment_config.exclude_feature_groups),
+            "autoxai_include_all_metrics": bool(experiment_config.autoxai_include_all_metrics),
             "svc_config": {
                 "C": float(model_config.C),
                 "max_iter": int(model_config.max_iter),
@@ -626,7 +665,7 @@ def main(argv: Sequence[str] | None = None) -> None:
         print(json.dumps(summary, indent=2))
         return
 
-    for persona in args.personas:
+    for persona in personas:
         persona_config_path = PERSONA_CONFIGS[persona]
         for encoded_path in encoded_files:
             print(f"Running {persona} experiment for {encoded_path.name}")

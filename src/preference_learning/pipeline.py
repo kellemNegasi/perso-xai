@@ -12,6 +12,7 @@ from typing import Any, Dict, Iterable, Mapping, Sequence, Tuple
 import numpy as np
 import pandas as pd
 from sklearn.model_selection import train_test_split
+import yaml
 
 from src.baseline.autoxai_scoring import compute_scores
 from src.baseline.autoxai_types import ObjectiveTerm
@@ -158,44 +159,18 @@ def run_persona_linear_svc_simulation(
     persona_config = load_persona_config(persona_config_path)
     persona_config_raw: dict[str, Any] | None
     try:
-        persona_config_raw = json.loads(persona_config_path.read_text(encoding="utf-8"))
+        persona_config_raw = yaml.safe_load(persona_config_path.read_text(encoding="utf-8"))
     except Exception:
         persona_config_raw = None
     pareto_metrics, variant_to_method, pareto_metrics_already_oriented = _load_pareto_metrics_for_encoded(
         encoded_path
     )
-    # AutoXAI-style baseline objective, but expanded to use the full correctness/fidelity signal set
-    # available in HC-XAI (instead of relying on a single metric like infidelity).
-    #
-    # We preserve the paper's top-level weighting scheme:
-    #   robustness = 1, correctness = 2, compactness = 0.5
-    # by distributing the correctness weight uniformly across its constituent metrics.
-    correctness_metrics = (
-        ObjectiveTerm(name="correctness", metric_key="correctness", direction="max", weight=2.0 / 6.0),
-        ObjectiveTerm(name="infidelity", metric_key="infidelity", direction="min", weight=2.0 / 6.0),
-        ObjectiveTerm(name="monotonicity", metric_key="monotonicity", direction="max", weight=2.0 / 6.0),
-        ObjectiveTerm(
-            name="non_sensitivity_violation_fraction",
-            metric_key="non_sensitivity_violation_fraction",
-            direction="min",
-            weight=2.0 / 6.0,
-        ),
-        ObjectiveTerm(
-            name="non_sensitivity_safe_fraction",
-            metric_key="non_sensitivity_safe_fraction",
-            direction="max",
-            weight=2.0 / 6.0,
-        ),
-        ObjectiveTerm(
-            name="non_sensitivity_delta_mean",
-            metric_key="non_sensitivity_delta_mean",
-            direction="min",
-            weight=2.0 / 6.0,
-        ),
-    )
+    # AutoXAI-style baseline objective uses the paper's three metrics.
+    # We preserve the top-level weighting scheme:
+    #   robustness = 1, correctness = 2 (infidelity), compactness = 0.5
     autoxai_objective = [
         ObjectiveTerm(name="robustness", metric_key="relative_input_stability", direction="min", weight=1.0),
-        *correctness_metrics,
+        ObjectiveTerm(name="infidelity", metric_key="infidelity", direction="min", weight=2.0),
         ObjectiveTerm(
             name="compactness",
             metric_key="compactness_effective_features",
@@ -368,6 +343,7 @@ def run_persona_linear_svc_simulation(
             "tau": float(config.tau) if config.tau is not None else None,
             "concentration_c": float(config.concentration_c) if config.concentration_c is not None else None,
             "exclude_feature_groups": list(config.exclude_feature_groups),
+            "autoxai_include_all_metrics": bool(config.autoxai_include_all_metrics),
         },
         "config_md5": config_md5,
         "autoxai_baseline": {

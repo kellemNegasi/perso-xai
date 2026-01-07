@@ -21,7 +21,10 @@ PERSONA_CONFIGS = {
     "layperson": DEFAULT_PERSONA_CONFIG_DIR / "lay.yaml",
     "regulator": DEFAULT_PERSONA_CONFIG_DIR / "regulator.yaml",
     "clinician": DEFAULT_PERSONA_CONFIG_DIR / "clinician.yaml",
+    "auto-xai-persona": DEFAULT_PERSONA_CONFIG_DIR / "auto-xai-persona.yaml",
 }
+EXPERIMENT_MODES = ("preference-only", "autoxai-comparison")
+AUTOXAI_METRIC_MODES = ("auto-xai", "all-metrics")
 
 
 def parse_top_k(values: Sequence[str] | None) -> Sequence[int]:
@@ -51,6 +54,24 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         choices=tuple(sorted(PERSONA_CONFIGS)),
         default="layperson",
         help="Persona whose pair labels should be used (default: layperson).",
+    )
+    parser.add_argument(
+        "--experiment-mode",
+        choices=EXPERIMENT_MODES,
+        default="preference-only",
+        help=(
+            "Experiment mode controlling persona selection and AutoXAI settings. "
+            "'autoxai-comparison' forces auto-xai-persona."
+        ),
+    )
+    parser.add_argument(
+        "--autoxai-metric-mode",
+        choices=AUTOXAI_METRIC_MODES,
+        default="auto-xai",
+        help=(
+            "AutoXAI objective to use in comparison mode: 'auto-xai' uses the paper's metric set, "
+            "while 'all-metrics' expands to all available Pareto metrics."
+        ),
     )
     parser.add_argument(
         "--persona-config",
@@ -153,7 +174,14 @@ def main(argv: Sequence[str] | None = None) -> None:
     encoded_path = args.encoded_path
     if not encoded_path.exists():
         raise FileNotFoundError(f"Encoded path does not exist: {encoded_path}")
+    if args.experiment_mode == "autoxai-comparison" and args.persona_config is not None:
+        raise ValueError("--persona-config cannot be used with --experiment-mode autoxai-comparison.")
     top_k = parse_top_k(args.top_k)
+    resolved_persona = args.persona
+    autoxai_include_all_metrics = bool(args.autoxai_include_all_metrics)
+    if args.experiment_mode == "autoxai-comparison":
+        resolved_persona = "auto-xai-persona"
+        autoxai_include_all_metrics = args.autoxai_metric_mode == "all-metrics"
     experiment_config = ExperimentConfig(
         test_size=args.test_size,
         random_state=args.random_state,
@@ -163,7 +191,7 @@ def main(argv: Sequence[str] | None = None) -> None:
         label_seed=int(args.label_seed),
         tau=float(args.tau) if args.tau is not None else None,
         exclude_feature_groups=tuple(args.exclude_feature_groups or ()),
-        autoxai_include_all_metrics=bool(args.autoxai_include_all_metrics),
+        autoxai_include_all_metrics=autoxai_include_all_metrics,
     )
     model_config = LinearSVCConfig(
         C=args.svc_C,
@@ -172,7 +200,7 @@ def main(argv: Sequence[str] | None = None) -> None:
         tune=bool(args.tune_svc),
     )
     if args.persona_config is not None or args.pair_labels_dir is None:
-        persona_config_path = args.persona_config or PERSONA_CONFIGS[args.persona]
+        persona_config_path = args.persona_config or PERSONA_CONFIGS[resolved_persona]
         result = run_persona_linear_svc_simulation(
             encoded_path=encoded_path,
             persona_config_path=persona_config_path,
@@ -189,7 +217,7 @@ def main(argv: Sequence[str] | None = None) -> None:
     metrics = run_linear_svc_experiment(
         encoded_path=encoded_path,
         pair_labels_dir=pair_labels_dir,
-        persona=args.persona,
+        persona=resolved_persona,
         output_dir=args.output_dir or DEFAULT_PROCESSED_DIR,
         experiment_config=experiment_config,
         model_config=model_config,

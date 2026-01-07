@@ -40,6 +40,7 @@ PERSONA_CONFIGS: Mapping[str, Path] = {
     "layperson": DEFAULT_PERSONA_CONFIG_DIR / "lay.yaml",
     "regulator": DEFAULT_PERSONA_CONFIG_DIR / "regulator.yaml",
     "clinician": DEFAULT_PERSONA_CONFIG_DIR / "clinician.yaml",
+    "auto-xai-persona": DEFAULT_PERSONA_CONFIG_DIR / "auto-xai-persona.yaml",
 }
 
 PERSONA_CHOICES = tuple(sorted(PERSONA_CONFIGS))

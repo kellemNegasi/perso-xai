@@ -31,6 +31,19 @@ from .ranker import PersonaPairwiseRanker
 DEFAULT_RESULTS_ROOT = Path("results") / "full_run_dec8"
 DEFAULT_PROCESSED_DIR = DEFAULT_RESULTS_ROOT / "preference_learning"
 
+# Some Pareto-front generators persist "lower is better" metrics already negated so the
+# Pareto optimisation is a pure maximisation problem (see `generate_pareto_fronts.py`).
+# Other runs persist raw (non-negated) metrics. We detect this at load time.
+PARETO_MINIMIZE_METRICS: frozenset[str] = frozenset(
+    {
+        "infidelity",
+        "non_sensitivity_violation_fraction",
+        "non_sensitivity_delta_mean",
+        "relative_input_stability",
+        "covariate_complexity",
+    }
+)
+
 
 def _slug(value: object) -> str:
     if not isinstance(value, str) or not value:
@@ -148,7 +161,9 @@ def run_persona_linear_svc_simulation(
         persona_config_raw = json.loads(persona_config_path.read_text(encoding="utf-8"))
     except Exception:
         persona_config_raw = None
-    pareto_metrics, variant_to_method = _load_pareto_metrics_for_encoded(encoded_path)
+    pareto_metrics, variant_to_method, pareto_metrics_already_oriented = _load_pareto_metrics_for_encoded(
+        encoded_path
+    )
     # AutoXAI-style baseline objective, but expanded to use the full correctness/fidelity signal set
     # available in HC-XAI (instead of relying on a single metric like infidelity).
     #
@@ -207,6 +222,7 @@ def run_persona_linear_svc_simulation(
             persona_config,
             seed=config.persona_seed + user_idx,
             tau=config.tau,
+            concentration_c=config.concentration_c,
         )
         ranker = PersonaPairwiseRanker(
             user=user,
@@ -281,8 +297,7 @@ def run_persona_linear_svc_simulation(
                         objective=autoxai_objective,
                         scaling="Std",
                         scaling_scope="instance",
-                        # Pareto-front metrics are already oriented as "higher is better".
-                        apply_direction=False,
+                        apply_direction=not pareto_metrics_already_oriented,
                     )
                     predicted = {
                         score.method_variant: float(score.aggregated_score)
@@ -301,6 +316,7 @@ def run_persona_linear_svc_simulation(
             {
                 "user_index": user_idx,
                 "tau": user.tau,
+                "concentration_c": user.concentration_c,
                 "persona_seed": int(config.persona_seed + user_idx),
                 "label_seed": int(config.label_seed + user_idx),
                 "group_weights": dict(user.group_weights),
@@ -340,6 +356,7 @@ def run_persona_linear_svc_simulation(
             "metric_order": list(persona_config.metric_names()),
             "default_tau": float(persona_config.tau) if persona_config.tau is not None else None,
             "tau_override": float(config.tau) if config.tau is not None else None,
+            "concentration_c_override": float(config.concentration_c) if config.concentration_c is not None else None,
         },
         "experiment_config": {
             "test_size": config.test_size,
@@ -349,12 +366,14 @@ def run_persona_linear_svc_simulation(
             "persona_seed": config.persona_seed,
             "label_seed": config.label_seed,
             "tau": float(config.tau) if config.tau is not None else None,
+            "concentration_c": float(config.concentration_c) if config.concentration_c is not None else None,
             "exclude_feature_groups": list(config.exclude_feature_groups),
         },
         "config_md5": config_md5,
         "autoxai_baseline": {
             "scaling": "Std",
             "scaling_scope": "instance",
+            "pareto_metrics_already_oriented": bool(pareto_metrics_already_oriented),
             "objective": [
                 {
                     "name": term.name,
@@ -445,13 +464,16 @@ def _default_pareto_path(encoded_path: Path) -> Path:
 
 
 
-def _load_pareto_metrics_for_encoded(encoded_path: Path) -> Tuple[Dict[int, Dict[str, Dict[str, float]]], Dict[str, str]]:
+def _load_pareto_metrics_for_encoded(
+    encoded_path: Path,
+) -> Tuple[Dict[int, Dict[str, Dict[str, float]]], Dict[str, str], bool]:
     """
     Load raw per-instance Pareto-front metrics for AutoXAI baseline scoring.
 
     Returns:
       - dataset_index -> method_variant -> metrics dict
       - method_variant -> method
+      - whether metrics are already oriented ("higher is better") for minimize metrics
     """
     # We separately load the raw Pareto metrics for the AutoXAI baseline scoring.
     # The baseline scorer expects raw per-instance metric dicts keyed by method_variant.
@@ -486,7 +508,22 @@ def _load_pareto_metrics_for_encoded(encoded_path: Path) -> Tuple[Dict[int, Dict
                 variants[variant] = cleaned
         if variants:
             candidate_metrics[idx] = variants
-    return candidate_metrics, variant_to_method
+
+    values_checked: list[float] = []
+    for variants in candidate_metrics.values():
+        for metrics in variants.values():
+            for key in PARETO_MINIMIZE_METRICS:
+                value = metrics.get(key)
+                if isinstance(value, (int, float)):
+                    values_checked.append(float(value))
+    # If most values for known non-negative metrics are negative, we assume the Pareto file
+    # already negated lower-is-better metrics.
+    already_oriented = False
+    if values_checked:
+        negative = sum(1 for v in values_checked if v < 0)
+        already_oriented = (negative / len(values_checked)) > 0.5
+
+    return candidate_metrics, variant_to_method, already_oriented
 
 
 def _persist_processed_data(dataset: PairwisePreferenceData, experiment_dir: Path) -> None:

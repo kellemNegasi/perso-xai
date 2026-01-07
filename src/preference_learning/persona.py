@@ -288,6 +288,7 @@ class HierarchicalDirichletUser:
         *,
         seed: int | None = None,
         tau: float | None = None,
+        concentration_c: float | None = None,
         negate_metrics: Iterable[str] = DEFAULT_NEGATE_METRICS,
         metrics_already_oriented: bool = False,
     ) -> None:
@@ -298,6 +299,8 @@ class HierarchicalDirichletUser:
             raise ValueError("tau must be > 0.")
         self.config = config
         self.tau = float(resolved_tau)
+        self.concentration_c_override = float(concentration_c) if concentration_c is not None else None
+        self.concentration_c: float | None = None
         self.negate_metrics = frozenset() if metrics_already_oriented else frozenset(negate_metrics)
         self._rng = np.random.default_rng(seed)
         self.metric_order: tuple[str, ...] = tuple(config.metric_names())
@@ -329,7 +332,14 @@ class HierarchicalDirichletUser:
                 raise ValueError("Persona config is missing group 'preference' ratings for some groups.")
             w0_group = _normalize_positive(group_scores, label="Group preference")
             model_payload = _load_preference_model_payload()
-            c = _lookup_concentration_c(model_payload, self.config.persona)
+            c = (
+                float(self.concentration_c_override)
+                if self.concentration_c_override is not None
+                else _lookup_concentration_c(model_payload, self.config.persona)
+            )
+            if c <= 0:
+                raise ValueError("concentration_c must be > 0.")
+            self.concentration_c = float(max(c, MIN_DIRICHLET_CONCENTRATION))
             group_alphas = np.maximum(c * w0_group, MIN_DIRICHLET_CONCENTRATION)
             group_weights = self._rng.dirichlet(group_alphas)
             self.group_weights = {group.name: float(w) for group, w in zip(groups, group_weights)}
@@ -343,6 +353,7 @@ class HierarchicalDirichletUser:
             group_weights = self._rng.dirichlet(group_alphas)
             self.group_weights = {group.name: float(w) for group, w in zip(groups, group_weights)}
             metric_concentration = 0.0
+            self.concentration_c = None
 
         metric_weights: MutableMapping[str, float] = {}
         for group, group_w in zip(groups, group_weights):

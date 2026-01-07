@@ -17,5 +17,6 @@ class ExperimentConfig:
     persona_seed: int = 13
     label_seed: int = 41
     tau: float | None = None
+    concentration_c: float | None = None
     exclude_feature_groups: Sequence[str] = field(default_factory=tuple)
     autoxai_include_all_metrics: bool = False

@@ -334,3 +334,15 @@ The evaluator also stores `metadata["confidence_per_feature"]` for transparency.
 `encode_pareto_fronts.py` negates metrics that are “lower is better” before doing
 within-instance z-normalisation (so the model always sees “higher is better”).
 See `NEGATE_METRICS` in `encode_pareto_fronts.py`.
+
+### Handling metric outliers during encoding
+
+Some metrics (notably `infidelity` and `relative_input_stability`) can be heavy-tailed for some
+methods/hyperparameters (e.g. stochastic explainers). If you see extreme values dominating the
+within-instance z-normalisation, rerun encoding with a monotone compression transform:
+
+`python encode_pareto_fronts.py --metric-value-transform signed_log1p`
+
+To also compress count-like metrics (e.g. `non_sensitivity_zero_features`), add:
+
+`python encode_pareto_fronts.py --metric-value-transform signed_log1p --transform-count-metrics`

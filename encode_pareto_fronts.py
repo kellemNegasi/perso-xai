@@ -83,6 +83,11 @@ NEGATE_METRICS = {
     "covariate_complexity",
 }
 
+COUNT_LIKE_METRICS = (
+    "non_sensitivity_zero_features",
+    "contrastivity_pairs",
+)
+
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     """Parse CLI arguments for encoding Pareto fronts into tabular features."""
@@ -113,6 +118,33 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         default=DEFAULT_HPARAM_CONFIG,
         help="Path to explainer hyperparameter grid config (default: src/configs/explainer_hyperparameters.yml).",
     )
+    parser.add_argument(
+        "--metric-value-transform",
+        choices=("none", "signed_log1p"),
+        default="none",
+        help=(
+            "Optional transform applied to metric values before within-instance z-normalization. "
+            "Use signed_log1p to dampen heavy-tailed/outlier metrics while preserving ordering "
+            "(default: none)."
+        ),
+    )
+    parser.add_argument(
+        "--transform-metrics",
+        nargs="+",
+        default=("infidelity", "relative_input_stability"),
+        help=(
+            "Metric names to transform when --metric-value-transform is enabled "
+            "(default: infidelity relative_input_stability)."
+        ),
+    )
+    parser.add_argument(
+        "--transform-count-metrics",
+        action="store_true",
+        help=(
+            "When set, also applies the metric-value transform to count-like metrics "
+            f"(currently: {', '.join(COUNT_LIKE_METRICS)})."
+        ),
+    )
     return parser.parse_args(argv)
 
 
@@ -130,12 +162,19 @@ def main(argv: Sequence[str] | None = None) -> None:
         raise FileNotFoundError(f"No pareto JSON files found under {args.pareto_dir}")
 
     for pareto_path in pareto_files:
+        transform_metric_names = list(args.transform_metrics or ())
+        if args.transform_count_metrics:
+            for name in COUNT_LIKE_METRICS:
+                if name not in transform_metric_names:
+                    transform_metric_names.append(name)
         df = encode_pareto_file(
             pareto_path,
             dataset_meta=dataset_meta,
             explainer_meta=explainer_meta,
             hyper_stats=hyper_stats,
             hyperparam_universe=hyperparam_universe,
+            metric_value_transform=str(args.metric_value_transform),
+            transform_metric_names=tuple(transform_metric_names),
         )
         output_path = args.output_dir / f"{pareto_path.stem}_encoded.parquet"
         df.to_parquet(output_path, index=False)
@@ -210,6 +249,8 @@ def encode_pareto_file(
     explainer_meta: Mapping[str, Mapping[str, Any]],
     hyper_stats: Mapping[str, Mapping[str, Dict[str, float]]],
     hyperparam_universe: Sequence[str],
+    metric_value_transform: str = "none",
+    transform_metric_names: Sequence[str] = ("infidelity", "relative_input_stability"),
 ) -> pd.DataFrame:
     """
     Convert a single Pareto JSON summary into a feature-rich DataFrame.
@@ -291,7 +332,14 @@ def encode_pareto_file(
             row.update(applicability)
             row["_metrics_raw"] = metrics
             rows.append(row)
-        records.extend(normalize_instance_metrics(rows, pareto_metrics))
+        records.extend(
+            normalize_instance_metrics(
+                rows,
+                pareto_metrics,
+                metric_value_transform=metric_value_transform,
+                transform_metric_names=transform_metric_names,
+            )
+        )
     if not records:
         return pd.DataFrame()
     df = pd.DataFrame(records)
@@ -309,6 +357,9 @@ def transform_metrics(metrics: Mapping[str, Any]) -> Dict[str, Optional[float]]:
 def normalize_instance_metrics(
     rows: List[Dict[str, Any]],
     metric_names: Sequence[str],
+    *,
+    metric_value_transform: str = "none",
+    transform_metric_names: Sequence[str] = ("infidelity", "relative_input_stability"),
 ) -> List[Dict[str, Any]]:
     """
     Z-normalize metrics across candidates within a single instance.
@@ -317,6 +368,21 @@ def normalize_instance_metrics(
     """
     if not rows:
         return []
+    transform_set = set(transform_metric_names or ())
+    transform_mode = str(metric_value_transform or "none").lower()
+    if transform_mode not in {"none", "signed_log1p"}:
+        raise ValueError(f"Unknown metric_value_transform={metric_value_transform!r}")
+
+    def _transform(metric: str, value: Optional[float]) -> Optional[float]:
+        if value is None:
+            return None
+        if metric not in transform_set or transform_mode == "none":
+            return float(value)
+        # Monotone, sign-preserving compression for heavy-tailed values.
+        if transform_mode == "signed_log1p":
+            return math.copysign(math.log1p(abs(float(value))), float(value))
+        return float(value)
+
     per_metric_values: Dict[str, List[float]] = {name: [] for name in metric_names}
     per_row_metrics: List[Dict[str, Optional[float]]] = []
 
@@ -324,7 +390,8 @@ def normalize_instance_metrics(
         metrics = row.pop("_metrics_raw", {}) or {}
         row_metrics: Dict[str, Optional[float]] = {}
         for metric in metric_names:
-            value = metrics.get(metric)
+            raw_value = metrics.get(metric)
+            value = _transform(metric, raw_value)
             if value is not None:
                 per_metric_values[metric].append(value)
             row_metrics[metric] = value

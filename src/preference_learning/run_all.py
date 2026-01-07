@@ -71,6 +71,14 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         help="Feature groups to drop from model features (default: none).",
     )
     parser.add_argument(
+        "--autoxai-include-all-metrics",
+        action="store_true",
+        help=(
+            "When set, the pipeline's AutoXAI baseline scoring uses all available Pareto-front metrics "
+            "(in addition to robustness/correctness/compactness terms)."
+        ),
+    )
+    parser.add_argument(
         "--top-k",
         nargs="+",
         help="Space-separated list of k values for evaluation (default: 1 3 5).",
@@ -255,6 +263,7 @@ def main(argv: Sequence[str] | None = None) -> None:
         label_seed=int(args.label_seed),
         tau=float(args.tau) if args.tau is not None else None,
         exclude_feature_groups=tuple(args.exclude_feature_groups or ()),
+        autoxai_include_all_metrics=bool(args.autoxai_include_all_metrics),
     )
     model_config = LinearSVCConfig(
         C=args.svc_C,
@@ -275,6 +284,7 @@ def main(argv: Sequence[str] | None = None) -> None:
                 label_seed=experiment_config.label_seed,
                 tau=float(tau),
                 exclude_feature_groups=experiment_config.exclude_feature_groups,
+                autoxai_include_all_metrics=experiment_config.autoxai_include_all_metrics,
             )
             spearman_values: list[float] = []
             for persona in args.personas:
@@ -341,6 +351,7 @@ def main(argv: Sequence[str] | None = None) -> None:
                 label_seed=experiment_config.label_seed,
                 tau=experiment_config.tau,
                 exclude_feature_groups=experiment_config.exclude_feature_groups,
+                autoxai_include_all_metrics=experiment_config.autoxai_include_all_metrics,
             )
             spearman_values: list[float] = []
             for persona in args.personas:

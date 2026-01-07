@@ -22,7 +22,7 @@ IGNORED_METRICS = {
     "contrastivity_pairs",
 }
 
-DEFAULT_RESULTS_ROOT = Path("results") / "full_run_dec8"
+DEFAULT_RESULTS_ROOT = Path("results") / "hc_combo_20251228_050331"
 DEFAULT_RESULTS_DIR = DEFAULT_RESULTS_ROOT
 DEFAULT_DETAILED_DIR = DEFAULT_RESULTS_ROOT / "detailed_explanations"
 DEFAULT_METRICS_DIR = DEFAULT_RESULTS_ROOT / "metrics_results"

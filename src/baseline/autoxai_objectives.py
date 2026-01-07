@@ -80,37 +80,32 @@ def default_objective_terms() -> List[ObjectiveTerm]:
     AutoXAI-paper-aligned objective (same for all personas).
 
     Notes:
-    - Robustness/continuity: relative_input_stability (lower is better).
-    - Correctness/fidelity: include correctness, infidelity, and non-sensitivity/monotonicity signals.
-    - Compactness: aggregate HC-XAI compactness metrics (higher is better).
+    - Matches AutoXAI (CIKM'22) diabetes scenario aggregation:
+      robustness=1, infidelity=2, number_of_features=0.5.
+    - In this codebase, we map:
+        - robustness/continuity -> relative_input_stability (lower is better)
+        - infidelity -> infidelity (lower is better)
+        - number_of_features -> compactness_effective_features (higher is better)
     """
     return [
-        # continuity / robustness
-        ObjectiveTerm(name="continuity", metric_key="relative_input_stability", direction="min", weight=1.0),
-        # correctness / fidelity group
-        ObjectiveTerm(name="correctness", metric_key="correctness", direction="max", weight=1.0),
-        ObjectiveTerm(name="infidelity", metric_key="infidelity", direction="min", weight=1.0),
         ObjectiveTerm(
-            name="non_sensitivity_violation_fraction", 
-            metric_key="non_sensitivity_violation_fraction",
-            direction="min",
-            weight=1.0,
-            ),
-        ObjectiveTerm(
-            name="non_sensitivity_safe_fraction",
-            metric_key="non_sensitivity_safe_fraction",
-            direction="max",
-            weight=1.0,
-            ),
-        ObjectiveTerm(
-            name="non_sensitivity_delta_mean",
-            metric_key="non_sensitivity_delta_mean",
+            name="robustness",
+            metric_key="relative_input_stability",
             direction="min",
             weight=1.0,
         ),
-        ObjectiveTerm(name="monotonicity", metric_key="monotonicity", direction="max", weight=1.0),
-        # compactness group
-        ObjectiveTerm(name="compactness", metric_key="compactness", direction="max", weight=1.0),
+        ObjectiveTerm(
+            name="infidelity",
+            metric_key="infidelity",
+            direction="min",
+            weight=2.0,
+        ),
+        ObjectiveTerm(
+            name="compactness",
+            metric_key="compactness_effective_features",
+            direction="max",
+            weight=0.5,
+        ),
     ]
 
 
@@ -118,5 +113,54 @@ def persona_objective_terms(persona: str) -> List[ObjectiveTerm]:
     """
     Persona-aligned objectives: paper-aligned metrics for every persona.
     """
-    # All personas share the same objective to mirror the AutoXAI paper.
-    return default_objective_terms()
+    if persona == "autoxai":
+        return default_objective_terms()
+    if persona == "layperson":
+        return [
+            ObjectiveTerm(
+                name="compactness",
+                metric_key="compactness_effective_features",
+                direction="max",
+                weight=1.0,
+            ),
+            ObjectiveTerm(
+                name="contrastivity",
+                metric_key="contrastivity",
+                direction="max",
+                weight=1.0,
+            ),
+            ObjectiveTerm(
+                name="stability",
+                metric_key="relative_input_stability",
+                direction="min",
+                weight=1.0,
+            ),
+        ]
+    if persona == "regulator":
+        return [
+            ObjectiveTerm(
+                name="faithfulness",
+                metric_key="correctness",
+                direction="max",
+                weight=1.0,
+            ),
+            ObjectiveTerm(
+                name="completeness",
+                metric_key="completeness_score",
+                direction="max",
+                weight=1.0,
+            ),
+            ObjectiveTerm(
+                name="consistency",
+                metric_key="consistency",
+                direction="max",
+                weight=1.0,
+            ),
+            ObjectiveTerm(
+                name="compactness",
+                metric_key="compactness_effective_features",
+                direction="max",
+                weight=1.0,
+            ),
+        ]
+    raise ValueError(f"Unknown persona preset: {persona!r}")

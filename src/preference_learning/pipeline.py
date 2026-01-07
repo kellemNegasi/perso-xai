@@ -13,8 +13,8 @@ import numpy as np
 import pandas as pd
 from sklearn.model_selection import train_test_split
 
-from src.baseline.autoxai_objectives import default_objective_terms
 from src.baseline.autoxai_scoring import compute_scores
+from src.baseline.autoxai_types import ObjectiveTerm
 
 from .config import ExperimentConfig
 from .data import (
@@ -149,7 +149,55 @@ def run_persona_linear_svc_simulation(
     except Exception:
         persona_config_raw = None
     pareto_metrics, variant_to_method = _load_pareto_metrics_for_encoded(encoded_path)
-    autoxai_objective = default_objective_terms()
+    # AutoXAI-style baseline objective, but expanded to use the full correctness/fidelity signal set
+    # available in HC-XAI (instead of relying on a single metric like infidelity).
+    #
+    # We preserve the paper's top-level weighting scheme:
+    #   robustness = 1, correctness = 2, compactness = 0.5
+    # by distributing the correctness weight uniformly across its constituent metrics.
+    correctness_metrics = (
+        ObjectiveTerm(name="correctness", metric_key="correctness", direction="max", weight=2.0 / 6.0),
+        ObjectiveTerm(name="infidelity", metric_key="infidelity", direction="min", weight=2.0 / 6.0),
+        ObjectiveTerm(name="monotonicity", metric_key="monotonicity", direction="max", weight=2.0 / 6.0),
+        ObjectiveTerm(
+            name="non_sensitivity_violation_fraction",
+            metric_key="non_sensitivity_violation_fraction",
+            direction="min",
+            weight=2.0 / 6.0,
+        ),
+        ObjectiveTerm(
+            name="non_sensitivity_safe_fraction",
+            metric_key="non_sensitivity_safe_fraction",
+            direction="max",
+            weight=2.0 / 6.0,
+        ),
+        ObjectiveTerm(
+            name="non_sensitivity_delta_mean",
+            metric_key="non_sensitivity_delta_mean",
+            direction="min",
+            weight=2.0 / 6.0,
+        ),
+    )
+    autoxai_objective = [
+        ObjectiveTerm(name="robustness", metric_key="relative_input_stability", direction="min", weight=1.0),
+        *correctness_metrics,
+        ObjectiveTerm(
+            name="compactness",
+            metric_key="compactness_effective_features",
+            direction="max",
+            weight=0.5,
+        ),
+    ]
+    if config.autoxai_include_all_metrics:
+        existing_keys = {term.metric_key for term in autoxai_objective}
+        all_metric_keys: set[str] = set()
+        for variants in pareto_metrics.values():
+            for metric_blob in variants.values():
+                all_metric_keys.update(metric_blob.keys())
+        remaining = sorted(key for key in all_metric_keys if key not in existing_keys)
+        autoxai_objective.extend(
+            ObjectiveTerm(name=key, metric_key=key, direction="max", weight=1.0) for key in remaining
+        )
 
     per_user_summaries: list[dict] = []
     per_user_topk: list[Dict[str, Dict[str, float]]] = []
@@ -386,6 +434,13 @@ def _average_topk(items: Sequence[Mapping[str, Mapping[str, object]]]) -> Dict[s
 
 def _default_pareto_path(encoded_path: Path) -> Path:
     base = encoded_path.stem.replace("_encoded", "")
+    # Prefer a Pareto-front JSON that lives alongside the encoded parquet (e.g. under
+    # `results/<run_id>/pareto_fronts/<dataset__model>.json`). Fall back to the
+    # historical `DEFAULT_RESULTS_ROOT` when no adjacent Pareto front exists.
+    for parent in encoded_path.parents:
+        candidate = parent / "pareto_fronts" / f"{base}.json"
+        if candidate.exists():
+            return candidate
     return DEFAULT_RESULTS_ROOT / "pareto_fronts" / f"{base}.json"
 
 

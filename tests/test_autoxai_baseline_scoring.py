@@ -20,10 +20,11 @@ def test_autoxai_baseline_compute_scores_instance_scope() -> None:
         }
     }
     variant_to_method = {"a": "lime", "b": "shap"}
+    objective = default_objective_terms()
     scores = compute_scores(
         candidate_metrics=candidate_metrics,
         variant_to_method=variant_to_method,
-        objective=default_objective_terms(),
+        objective=objective,
         scaling="Std",
         scaling_scope="instance",
     )
@@ -31,3 +32,7 @@ def test_autoxai_baseline_compute_scores_instance_scope() -> None:
     by_variant = {score.method_variant: score.aggregated_score for score in scores}
     assert by_variant["a"] > by_variant["b"]
 
+    weight_lookup = {term.name: term.weight for term in objective}
+    assert weight_lookup["robustness"] == 1.0
+    assert weight_lookup["infidelity"] == 2.0
+    assert weight_lookup["compactness"] == 0.5

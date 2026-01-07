@@ -13,14 +13,14 @@ from src.preference_learning.persona import (
 
 
 def test_load_persona_config_extracts_metric_order() -> None:
-    config = load_persona_config(Path("src/preference_learning/configs/lay-person.json"))
+    config = load_persona_config(Path("src/preference_learning/configs/lay.yaml"))
     metrics = list(config.metric_names())
     assert metrics, "Expected at least one metric in the persona config."
     assert len(metrics) == len(set(metrics)), "Metric order should not contain duplicates."
 
 
 def test_dirichlet_sampling_produces_valid_weights() -> None:
-    config = load_persona_config(Path("src/preference_learning/configs/regulator.json"))
+    config = load_persona_config(Path("src/preference_learning/configs/regulator.yaml"))
     user = HierarchicalDirichletUser(config, seed=7, tau=1.0)
     assert user.metric_weights, "Expected sampled metric weights."
     assert all(w >= 0 for w in user.metric_weights.values())
@@ -29,7 +29,7 @@ def test_dirichlet_sampling_produces_valid_weights() -> None:
 
 
 def test_user_defaults_tau_from_config_or_module_default() -> None:
-    config = load_persona_config(Path("src/preference_learning/configs/lay-person.json"))
+    config = load_persona_config(Path("src/preference_learning/configs/lay.yaml"))
     user = HierarchicalDirichletUser(config, seed=0)
     assert user.tau == config.tau
 
@@ -38,14 +38,14 @@ def test_user_defaults_tau_from_config_or_module_default() -> None:
         type=config.type,
         description=config.description,
         tau=None,
-        groups=config.groups,
+        properties=config.properties,
     )
     user2 = HierarchicalDirichletUser(config_no_tau, seed=0)
     assert user2.tau == DEFAULT_TAU
 
 
 def test_preference_probability_is_antisymmetric() -> None:
-    config = load_persona_config(Path("src/preference_learning/configs/clinician.json"))
+    config = load_persona_config(Path("src/preference_learning/configs/clinician.yaml"))
     user = HierarchicalDirichletUser(config, seed=11, tau=1.0)
     n = len(user.metric_order)
     z_i = np.linspace(-1.0, 1.0, n)

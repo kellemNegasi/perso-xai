@@ -9,7 +9,7 @@ utility model:
   U(e) = sum_j w_j * z_j(e)
   P(e_i ≻ e_j) = sigmoid((U(e_i) - U(e_j)) / tau)
 
-The weights w are sampled once per run from a hierarchical Dirichlet persona
+The weights w are sampled once per run from a flat Dirichlet persona
 configuration under `src/preference_learning/configs/`, then reused to label
 every pair in the dataset.
 """
@@ -37,9 +37,9 @@ DEFAULT_PARETO_DIR = DEFAULT_RESULTS_ROOT / "pareto_fronts"
 
 DEFAULT_PERSONA_CONFIG_DIR = Path("src") / "preference_learning" / "configs"
 PERSONA_CONFIGS: Mapping[str, Path] = {
-    "layperson": DEFAULT_PERSONA_CONFIG_DIR / "lay-person.json",
-    "regulator": DEFAULT_PERSONA_CONFIG_DIR / "regulator.json",
-    "clinician": DEFAULT_PERSONA_CONFIG_DIR / "clinician.json",
+    "layperson": DEFAULT_PERSONA_CONFIG_DIR / "lay.yaml",
+    "regulator": DEFAULT_PERSONA_CONFIG_DIR / "regulator.yaml",
+    "clinician": DEFAULT_PERSONA_CONFIG_DIR / "clinician.yaml",
 }
 
 PERSONA_CHOICES = tuple(sorted(PERSONA_CONFIGS))
@@ -80,7 +80,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--persona-config",
         type=Path,
-        help="Optional path to a persona JSON file. Overrides --persona when provided.",
+        help="Optional path to a persona YAML file. Overrides --persona when provided.",
     )
     parser.add_argument(
         "--persona-seed",

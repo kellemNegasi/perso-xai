@@ -1,10 +1,9 @@
 """Persona models for sampling user preferences over explanation metrics.
 
-This module implements hierarchical Dirichlet personas defined by JSON configs
-in `src/preference_learning/configs/`. A persona samples:
-1) group weights over metric groups, and
-2) within-group weights over metrics,
-then combines them into final metric weights.
+This module implements flat Dirichlet personas defined by YAML configs in
+`src/preference_learning/configs/`. A persona samples weights directly over
+metrics from property-level ratings (one rating shared by all metrics in a
+property).
 
 These weights can be used to compute utilities over z-normalised metric vectors
 and to sample pairwise preferences via a logistic (sigmoid) model.
@@ -12,10 +11,9 @@ and to sample pairwise preferences via a logistic (sigmoid) model.
 
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Iterable, Mapping, MutableMapping, Sequence
+from typing import Dict, Iterable, Mapping, Sequence
 
 import numpy as np
 import yaml
@@ -35,21 +33,19 @@ DEFAULT_TAU: float = 0.05
 DEFAULT_PREFERENCE_MODEL_PATH: Path = (
     Path(__file__).resolve().parent / "configs" / "preference_model.yml"
 )
-DEFAULT_METRIC_LEVEL_LAMBDA: float = 0.5
 MIN_DIRICHLET_CONCENTRATION: float = 1e-6
 
 _PREFERENCE_MODEL_CACHE: dict[Path, Mapping[str, object] | None] = {}
 
 
 @dataclass(frozen=True)
-class MetricGroupConfig:
+class PropertyConfig:
     name: str
-    alpha: float | None
-    preference: float | None
-    metrics: Mapping[str, float]
+    preference: float
+    metrics: Sequence[str]
 
     def metric_names(self) -> Sequence[str]:
-        return tuple(self.metrics.keys())
+        return tuple(self.metrics)
 
 
 @dataclass(frozen=True)
@@ -58,13 +54,13 @@ class PersonaConfig:
     type: str
     description: str | None
     tau: float | None
-    groups: Sequence[MetricGroupConfig]
+    properties: Sequence[PropertyConfig]
 
     def metric_names(self) -> Sequence[str]:
         seen: set[str] = set()
         ordered: list[str] = []
-        for group in self.groups:
-            for metric in group.metrics.keys():
+        for prop in self.properties:
+            for metric in prop.metrics:
                 if metric not in seen:
                     ordered.append(metric)
                     seen.add(metric)
@@ -90,79 +86,61 @@ class PersonaConfig:
             parsed_tau = float(tau)
         else:
             raise ValueError(f"Persona config has invalid tau type: {type(tau)}")
-        raw_groups = payload.get("groups")
-        if not isinstance(raw_groups, Mapping) or not raw_groups:
-            raise ValueError("Persona config missing non-empty 'groups' mapping.")
+        raw_properties = payload.get("properties")
+        if not isinstance(raw_properties, Mapping) or not raw_properties:
+            raise ValueError("Persona config missing non-empty 'properties' mapping.")
 
-        groups: list[MetricGroupConfig] = []
-        for group_name, group_payload in raw_groups.items():
-            if not isinstance(group_name, str) or not group_name:
+        properties: list[PropertyConfig] = []
+        seen_metrics: set[str] = set()
+        for prop_name, prop_payload in raw_properties.items():
+            if not isinstance(prop_name, str) or not prop_name:
                 continue
-            if not isinstance(group_payload, Mapping):
+            if not isinstance(prop_payload, Mapping):
                 continue
-            alpha = group_payload.get("alpha")
-            preference = group_payload.get("preference")
-            metrics = group_payload.get("metrics")
+            preference = prop_payload.get("preference")
+            metrics = prop_payload.get("metrics")
 
-            parsed_alpha: float | None
-            if alpha is None:
-                parsed_alpha = None
-            elif isinstance(alpha, (int, float)) and float(alpha) > 0:
-                parsed_alpha = float(alpha)
-            else:
-                raise ValueError(f"Group '{group_name}' has invalid alpha={alpha!r}.")
+            if not isinstance(preference, (int, float)) or float(preference) <= 0:
+                raise ValueError(f"Property '{prop_name}' has invalid preference={preference!r}.")
 
-            parsed_preference: float | None
-            if preference is None:
-                parsed_preference = None
-            elif isinstance(preference, (int, float)) and float(preference) > 0:
-                parsed_preference = float(preference)
-            else:
-                raise ValueError(f"Group '{group_name}' has invalid preference={preference!r}.")
-
-            if parsed_alpha is None and parsed_preference is None:
-                raise ValueError(
-                    f"Group '{group_name}' must define either a positive 'alpha' (legacy) or 'preference' rating."
-                )
-
-            if not isinstance(metrics, Mapping) or not metrics:
-                raise ValueError(f"Group '{group_name}' has no metrics mapping.")
-            metric_alphas: Dict[str, float] = {}
-            for metric_name, metric_alpha in metrics.items():
+            if not isinstance(metrics, Sequence) or isinstance(metrics, (str, bytes)) or not metrics:
+                raise ValueError(f"Property '{prop_name}' has no metrics list.")
+            metric_names: list[str] = []
+            for metric_name in metrics:
                 if not isinstance(metric_name, str) or not metric_name:
-                    continue
-                if not isinstance(metric_alpha, (int, float)) or metric_alpha <= 0:
+                    raise ValueError(f"Property '{prop_name}' has invalid metric name={metric_name!r}.")
+                if metric_name in seen_metrics:
                     raise ValueError(
-                        f"Metric '{metric_name}' in group '{group_name}' has invalid alpha={metric_alpha!r}."
+                        f"Metric '{metric_name}' is listed under multiple properties; metrics must be unique."
                     )
-                metric_alphas[metric_name] = float(metric_alpha)
-            if not metric_alphas:
-                raise ValueError(f"Group '{group_name}' contains no valid metrics.")
-            groups.append(
-                MetricGroupConfig(
-                    name=group_name,
-                    alpha=parsed_alpha,
-                    preference=parsed_preference,
-                    metrics=metric_alphas,
+                metric_names.append(metric_name)
+                seen_metrics.add(metric_name)
+            if not metric_names:
+                raise ValueError(f"Property '{prop_name}' contains no valid metrics.")
+            properties.append(
+                PropertyConfig(
+                    name=prop_name,
+                    preference=float(preference),
+                    metrics=tuple(metric_names),
                 )
             )
 
-        if not groups:
-            raise ValueError("Persona config contains no valid groups.")
+        if not properties:
+            raise ValueError("Persona config contains no valid properties.")
         return cls(
             persona=persona,
             type=persona_type,
             description=description,
             tau=parsed_tau,
-            groups=tuple(groups),
+            properties=tuple(properties),
         )
 
 
 def load_persona_config(path: Path) -> PersonaConfig:
     with path.open("r", encoding="utf-8") as handle:
-        payload = json.load(handle)
+        payload = yaml.safe_load(handle)
     if not isinstance(payload, Mapping):
-        raise ValueError(f"Persona config must be a JSON object. Got: {type(payload)}")
+        raise ValueError(f"Persona config must be a YAML mapping. Got: {type(payload)}")
     return PersonaConfig.from_dict(payload)
 
 
@@ -219,21 +197,6 @@ def _load_preference_model_payload(path: Path = DEFAULT_PREFERENCE_MODEL_PATH) -
     return payload
 
 
-def _lookup_metric_level_lambda(payload: Mapping[str, object] | None) -> float:
-    if payload is None:
-        return DEFAULT_METRIC_LEVEL_LAMBDA
-    concentration = payload.get("concentration")
-    if not isinstance(concentration, Mapping):
-        return DEFAULT_METRIC_LEVEL_LAMBDA
-    metric_level = concentration.get("metric_level")
-    if not isinstance(metric_level, Mapping):
-        return DEFAULT_METRIC_LEVEL_LAMBDA
-    lam = metric_level.get("lambda")
-    if isinstance(lam, (int, float)) and float(lam) > 0:
-        return float(lam)
-    return DEFAULT_METRIC_LEVEL_LAMBDA
-
-
 def _lookup_concentration_c(payload: Mapping[str, object] | None, persona: str) -> float:
     if payload is None:
         raise ValueError(f"Missing preference model config at {DEFAULT_PREFERENCE_MODEL_PATH}.")
@@ -253,14 +216,14 @@ def _lookup_concentration_c(payload: Mapping[str, object] | None, persona: str) 
 
 class HierarchicalDirichletUser:
     """
-    Hierarchical persona that samples a two-level Dirichlet over metrics and then stays fixed.
+    Flat persona that samples a single Dirichlet over metrics and then stays fixed.
 
     Weight sampling
     ---------------
-    - Metrics are partitioned into groups; group weights g are drawn from Dirichlet(alpha_group).
-    - Within each group, metric weights m are drawn from Dirichlet(alpha_metric).
-    - The final weight for a metric is proportional to g[group] * m[metric]; if a metric appears
-      in multiple groups, contributions are summed and then all metric weights are normalised.
+    - Each property carries a 1–5 preference rating.
+    - The rating is repeated for each metric in the property, normalised across metrics, and
+      scaled by concentration c to form Dirichlet alphas.
+    - Metric weights are drawn directly from this single Dirichlet distribution.
 
     Utility and preference
     ----------------------
@@ -273,7 +236,7 @@ class HierarchicalDirichletUser:
     Parameters
     ----------
     config : PersonaConfig
-        Parsed persona definition containing either group/metric alphas (legacy) or 1–5 preference ratings.
+        Parsed persona definition containing property-level preference ratings.
     seed : int | None, optional
         RNG seed for reproducible weight sampling; if None, uses a nondeterministic seed.
     tau : float | None, optional
@@ -319,63 +282,32 @@ class HierarchicalDirichletUser:
         return self._weight_vector
 
     def resample_weights(self) -> None:
-        """(Re)sample hierarchical Dirichlet weights and cache as a metric vector."""
-        groups = list(self.config.groups)
-        uses_preferences = any(group.preference is not None for group in groups)
-        uses_alphas = any(group.alpha is not None for group in groups)
-        if uses_preferences and uses_alphas:
-            raise ValueError("Persona config mixes 'alpha' and 'preference' groups; choose one scheme.")
+        """(Re)sample flat Dirichlet weights and cache as a metric vector."""
+        properties = list(self.config.properties)
+        metric_names: list[str] = []
+        metric_scores: list[float] = []
+        for prop in properties:
+            for metric_name in prop.metrics:
+                metric_names.append(metric_name)
+                metric_scores.append(float(prop.preference))
 
-        if uses_preferences:
-            group_scores = [float(group.preference) for group in groups if group.preference is not None]
-            if len(group_scores) != len(groups):
-                raise ValueError("Persona config is missing group 'preference' ratings for some groups.")
-            w0_group = _normalize_positive(group_scores, label="Group preference")
-            model_payload = _load_preference_model_payload()
-            c = (
-                float(self.concentration_c_override)
-                if self.concentration_c_override is not None
-                else _lookup_concentration_c(model_payload, self.config.persona)
-            )
-            if c <= 0:
-                raise ValueError("concentration_c must be > 0.")
-            self.concentration_c = float(max(c, MIN_DIRICHLET_CONCENTRATION))
-            group_alphas = np.maximum(c * w0_group, MIN_DIRICHLET_CONCENTRATION)
-            group_weights = self._rng.dirichlet(group_alphas)
-            self.group_weights = {group.name: float(w) for group, w in zip(groups, group_weights)}
-            metric_lambda = _lookup_metric_level_lambda(model_payload)
-            metric_concentration = float(max(metric_lambda * c, MIN_DIRICHLET_CONCENTRATION))
-        else:
-            group_alphas = np.asarray(
-                [float(group.alpha) for group in groups if group.alpha is not None],
-                dtype=float,
-            )
-            group_weights = self._rng.dirichlet(group_alphas)
-            self.group_weights = {group.name: float(w) for group, w in zip(groups, group_weights)}
-            metric_concentration = 0.0
-            self.concentration_c = None
-
-        metric_weights: MutableMapping[str, float] = {}
-        for group, group_w in zip(groups, group_weights):
-            metric_names = list(group.metrics.keys())
-            if uses_preferences:
-                v0 = _normalize_positive(
-                    [float(group.metrics[name]) for name in metric_names],
-                    label=f"Metric preference for group '{group.name}'",
-                )
-                metric_alphas = np.maximum(metric_concentration * v0, MIN_DIRICHLET_CONCENTRATION)
-            else:
-                metric_alphas = np.asarray([group.metrics[name] for name in metric_names], dtype=float)
-            within = self._rng.dirichlet(metric_alphas)
-            for metric_name, metric_w in zip(metric_names, within):
-                metric_weights[metric_name] = metric_weights.get(metric_name, 0.0) + float(
-                    group_w * metric_w
-                )
-
-        total = float(sum(metric_weights.values()))
-        if total <= 0:
-            raise RuntimeError("Sampled metric weights sum to 0; check persona config alphas.")
-        self.metric_weights = {k: v / total for k, v in metric_weights.items()}
+        w0_metric = _normalize_positive(metric_scores, label="Metric preference")
+        model_payload = _load_preference_model_payload()
+        c = (
+            float(self.concentration_c_override)
+            if self.concentration_c_override is not None
+            else _lookup_concentration_c(model_payload, self.config.persona)
+        )
+        if c <= 0:
+            raise ValueError("concentration_c must be > 0.")
+        self.concentration_c = float(max(c, MIN_DIRICHLET_CONCENTRATION))
+        metric_alphas = np.maximum(self.concentration_c * w0_metric, MIN_DIRICHLET_CONCENTRATION)
+        sampled = self._rng.dirichlet(metric_alphas)
+        self.metric_weights = {name: float(weight) for name, weight in zip(metric_names, sampled)}
+        self.group_weights = {
+            prop.name: float(sum(self.metric_weights[name] for name in prop.metrics))
+            for prop in properties
+        }
         self._weight_vector = None
 
     def transform_metric_value(self, metric_name: str, value: float) -> float:

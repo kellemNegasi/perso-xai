@@ -24,9 +24,9 @@ DEFAULT_NUM_USERS_RESULTS_DIR = (
 )
 DEFAULT_PERSONA_CONFIG_DIR = Path("src") / "preference_learning" / "configs"
 PERSONA_CONFIGS = {
-    "layperson": DEFAULT_PERSONA_CONFIG_DIR / "lay-person.json",
-    "regulator": DEFAULT_PERSONA_CONFIG_DIR / "regulator.json",
-    "clinician": DEFAULT_PERSONA_CONFIG_DIR / "clinician.json",
+    "layperson": DEFAULT_PERSONA_CONFIG_DIR / "lay.yaml",
+    "regulator": DEFAULT_PERSONA_CONFIG_DIR / "regulator.yaml",
+    "clinician": DEFAULT_PERSONA_CONFIG_DIR / "clinician.yaml",
 }
 PERSONAS = tuple(sorted(PERSONA_CONFIGS))
 

@@ -18,9 +18,9 @@ from .pipeline import (
 
 DEFAULT_PERSONA_CONFIG_DIR = Path("src") / "preference_learning" / "configs"
 PERSONA_CONFIGS = {
-    "layperson": DEFAULT_PERSONA_CONFIG_DIR / "lay-person.json",
-    "regulator": DEFAULT_PERSONA_CONFIG_DIR / "regulator.json",
-    "clinician": DEFAULT_PERSONA_CONFIG_DIR / "clinician.json",
+    "layperson": DEFAULT_PERSONA_CONFIG_DIR / "lay.yaml",
+    "regulator": DEFAULT_PERSONA_CONFIG_DIR / "regulator.yaml",
+    "clinician": DEFAULT_PERSONA_CONFIG_DIR / "clinician.yaml",
 }
 
 
@@ -55,7 +55,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--persona-config",
         type=Path,
-        help="Optional path to a persona JSON file. When set, runs end-to-end simulation (no pair-label files).",
+        help="Optional path to a persona YAML file. When set, runs end-to-end simulation (no pair-label files).",
     )
     parser.add_argument(
         "--pair-labels-dir",

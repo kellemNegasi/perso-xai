@@ -1,0 +1,62 @@
+persona: lay
+type: hierarchical_dirichlet
+tau: 0.05
+description: >
+  Lay/end user prioritizing medium–high validity (accurate 'why', but not necessarily maximal coverage),
+  medium reliability (felt as trustworthiness but not explicitly demanded), very high parsimony/interpretability
+  (cognitive load dominates), high comparative 'why-not' insight (recourse framing, 'why me/what can I change?'),
+  and mixed uncertainty communication (can help but may confuse).
+
+properties:
+  correctness:
+    preference: 4
+    metrics:
+      - correctness
+      - infidelity
+      - monotonicity
+      - non_sensitivity_violation_fraction
+      - non_sensitivity_safe_fraction
+      - non_sensitivity_zero_features
+      - non_sensitivity_delta_mean
+
+  completeness:
+    preference: 4
+    metrics:
+      - completeness_drop
+      - completeness_random_drop
+      - completeness_score
+
+  consistency:
+    preference: 3
+    metrics:
+      - consistency
+
+  continuity_stability:
+    preference: 3
+    metrics:
+      - relative_input_stability
+
+  covariate_complexity:
+    preference: 5
+    metrics:
+      - covariate_complexity
+      - covariate_regularity
+
+  compactness:
+    preference: 5
+    metrics:
+      - compactness_sparsity
+      - compactness_top5_coverage
+      - compactness_top10_coverage
+      - compactness_effective_features
+
+  contrastivity:
+    preference: 4
+    metrics:
+      - contrastivity
+      - contrastivity_pairs
+
+  confidence:
+    preference: 3
+    metrics:
+      - confidence

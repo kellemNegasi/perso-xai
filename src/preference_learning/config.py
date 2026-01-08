@@ -20,3 +20,4 @@ class ExperimentConfig:
     concentration_c: float | None = None
     exclude_feature_groups: Sequence[str] = field(default_factory=tuple)
     autoxai_include_all_metrics: bool = False
+    autoxai_enabled: bool = True

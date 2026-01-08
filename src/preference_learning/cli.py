@@ -23,6 +23,7 @@ PERSONA_CONFIGS = {
     "clinician": DEFAULT_PERSONA_CONFIG_DIR / "clinician.yaml",
     "auto-xai-persona": DEFAULT_PERSONA_CONFIG_DIR / "auto-xai-persona.yaml",
 }
+AUTOXAI_MINIMAL_PERSONA_CONFIG = DEFAULT_PERSONA_CONFIG_DIR / "auto-xai-persona-minimal.yaml"
 EXPERIMENT_MODES = ("preference-only", "autoxai-comparison")
 AUTOXAI_METRIC_MODES = ("auto-xai", "all-metrics")
 
@@ -169,6 +170,16 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
+def _resolve_persona_config_path(args: argparse.Namespace, persona: str) -> Path:
+    if (
+        persona == "auto-xai-persona"
+        and args.experiment_mode == "autoxai-comparison"
+        and args.autoxai_metric_mode == "auto-xai"
+    ):
+        return AUTOXAI_MINIMAL_PERSONA_CONFIG
+    return PERSONA_CONFIGS[persona]
+
+
 def main(argv: Sequence[str] | None = None) -> None:
     args = parse_args(argv)
     encoded_path = args.encoded_path
@@ -179,9 +190,12 @@ def main(argv: Sequence[str] | None = None) -> None:
     top_k = parse_top_k(args.top_k)
     resolved_persona = args.persona
     autoxai_include_all_metrics = bool(args.autoxai_include_all_metrics)
+    autoxai_enabled = True
     if args.experiment_mode == "autoxai-comparison":
         resolved_persona = "auto-xai-persona"
         autoxai_include_all_metrics = args.autoxai_metric_mode == "all-metrics"
+    elif args.experiment_mode == "preference-only":
+        autoxai_enabled = False
     experiment_config = ExperimentConfig(
         test_size=args.test_size,
         random_state=args.random_state,
@@ -192,6 +206,7 @@ def main(argv: Sequence[str] | None = None) -> None:
         tau=float(args.tau) if args.tau is not None else None,
         exclude_feature_groups=tuple(args.exclude_feature_groups or ()),
         autoxai_include_all_metrics=autoxai_include_all_metrics,
+        autoxai_enabled=autoxai_enabled,
     )
     model_config = LinearSVCConfig(
         C=args.svc_C,
@@ -200,7 +215,7 @@ def main(argv: Sequence[str] | None = None) -> None:
         tune=bool(args.tune_svc),
     )
     if args.persona_config is not None or args.pair_labels_dir is None:
-        persona_config_path = args.persona_config or PERSONA_CONFIGS[resolved_persona]
+        persona_config_path = args.persona_config or _resolve_persona_config_path(args, resolved_persona)
         result = run_persona_linear_svc_simulation(
             encoded_path=encoded_path,
             persona_config_path=persona_config_path,

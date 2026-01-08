@@ -165,29 +165,31 @@ def run_persona_linear_svc_simulation(
     pareto_metrics, variant_to_method, pareto_metrics_already_oriented = _load_pareto_metrics_for_encoded(
         encoded_path
     )
-    # AutoXAI-style baseline objective uses the paper's three metrics.
-    # We preserve the top-level weighting scheme:
-    #   robustness = 1, correctness = 2 (infidelity), compactness = 0.5
-    autoxai_objective = [
-        ObjectiveTerm(name="robustness", metric_key="relative_input_stability", direction="min", weight=1.0),
-        ObjectiveTerm(name="infidelity", metric_key="infidelity", direction="min", weight=2.0),
-        ObjectiveTerm(
-            name="compactness",
-            metric_key="compactness_effective_features",
-            direction="max",
-            weight=0.5,
-        ),
-    ]
-    if config.autoxai_include_all_metrics:
-        existing_keys = {term.metric_key for term in autoxai_objective}
-        all_metric_keys: set[str] = set()
-        for variants in pareto_metrics.values():
-            for metric_blob in variants.values():
-                all_metric_keys.update(metric_blob.keys())
-        remaining = sorted(key for key in all_metric_keys if key not in existing_keys)
-        autoxai_objective.extend(
-            ObjectiveTerm(name=key, metric_key=key, direction="max", weight=1.0) for key in remaining
-        )
+    autoxai_objective: list[ObjectiveTerm] = []
+    if config.autoxai_enabled:
+        # AutoXAI-style baseline objective uses the paper's three metrics.
+        # We preserve the top-level weighting scheme:
+        #   robustness = 1, correctness = 2 (infidelity), compactness = 0.5
+        autoxai_objective = [
+            ObjectiveTerm(name="robustness", metric_key="relative_input_stability", direction="min", weight=1.0),
+            ObjectiveTerm(name="infidelity", metric_key="infidelity", direction="min", weight=2.0),
+            ObjectiveTerm(
+                name="compactness",
+                metric_key="compactness_effective_features",
+                direction="max",
+                weight=0.5,
+            ),
+        ]
+        if config.autoxai_include_all_metrics:
+            existing_keys = {term.metric_key for term in autoxai_objective}
+            all_metric_keys: set[str] = set()
+            for variants in pareto_metrics.values():
+                for metric_blob in variants.values():
+                    all_metric_keys.update(metric_blob.keys())
+            remaining = sorted(key for key in all_metric_keys if key not in existing_keys)
+            autoxai_objective.extend(
+                ObjectiveTerm(name=key, metric_key=key, direction="max", weight=1.0) for key in remaining
+            )
 
     per_user_summaries: list[dict] = []
     per_user_topk: list[Dict[str, Dict[str, float]]] = []
@@ -254,39 +256,42 @@ def run_persona_linear_svc_simulation(
                 per_instance_topk.append(topk_metrics)
                 instances_evaluated += 1
 
-            autoxai_metrics = pareto_metrics.get(int(instance_id))
-            if autoxai_metrics:
-                variants_present = set(instance_df["method_variant"].astype(str).tolist())
-                instance_candidate_metrics = {
-                    variant: metrics
-                    for variant, metrics in autoxai_metrics.items()
-                    if variant in variants_present
-                }
-                instance_variant_to_method = {
-                    variant: variant_to_method.get(variant, "unknown") for variant in instance_candidate_metrics
-                }
-                if instance_candidate_metrics:
-                    scored = compute_scores(
-                        candidate_metrics={int(instance_id): instance_candidate_metrics},
-                        variant_to_method=instance_variant_to_method,
-                        objective=autoxai_objective,
-                        scaling="Std",
-                        scaling_scope="instance",
-                        apply_direction=not pareto_metrics_already_oriented,
-                    )
-                    predicted = {
-                        score.method_variant: float(score.aggregated_score)
-                        for score in scored
-                        if score.dataset_index == int(instance_id)
+            if config.autoxai_enabled:
+                autoxai_metrics = pareto_metrics.get(int(instance_id))
+                if autoxai_metrics:
+                    variants_present = set(instance_df["method_variant"].astype(str).tolist())
+                    instance_candidate_metrics = {
+                        variant: metrics
+                        for variant, metrics in autoxai_metrics.items()
+                        if variant in variants_present
                     }
-                    autoxai_topk = evaluate_topk(predicted, ground_truth, k_values=config.top_k)
-                    if autoxai_topk:
-                        per_instance_autoxai_topk.append(autoxai_topk)
+                    instance_variant_to_method = {
+                        variant: variant_to_method.get(variant, "unknown")
+                        for variant in instance_candidate_metrics
+                    }
+                    if instance_candidate_metrics:
+                        scored = compute_scores(
+                            candidate_metrics={int(instance_id): instance_candidate_metrics},
+                            variant_to_method=instance_variant_to_method,
+                            objective=autoxai_objective,
+                            scaling="Std",
+                            scaling_scope="instance",
+                            apply_direction=not pareto_metrics_already_oriented,
+                        )
+                        predicted = {
+                            score.method_variant: float(score.aggregated_score)
+                            for score in scored
+                            if score.dataset_index == int(instance_id)
+                        }
+                        autoxai_topk = evaluate_topk(predicted, ground_truth, k_values=config.top_k)
+                        if autoxai_topk:
+                            per_instance_autoxai_topk.append(autoxai_topk)
 
         user_topk_mean = _average_topk(per_instance_topk)
-        user_autoxai_topk_mean = _average_topk(per_instance_autoxai_topk)
+        user_autoxai_topk_mean = _average_topk(per_instance_autoxai_topk) if config.autoxai_enabled else {}
         per_user_topk.append(user_topk_mean)
-        per_user_autoxai_topk.append(user_autoxai_topk_mean)
+        if config.autoxai_enabled:
+            per_user_autoxai_topk.append(user_autoxai_topk_mean)
         per_user_summaries.append(
             {
                 "user_index": user_idx,
@@ -306,7 +311,7 @@ def run_persona_linear_svc_simulation(
         )
 
     aggregate = _average_topk(per_user_topk)
-    aggregate_autoxai = _average_topk(per_user_autoxai_topk)
+    aggregate_autoxai = _average_topk(per_user_autoxai_topk) if config.autoxai_enabled else {}
     pareto_path = _default_pareto_path(encoded_path)
     model_conf = model_config or LinearSVCConfig(random_state=config.random_state)
     persona_config_fingerprint: object
@@ -344,23 +349,28 @@ def run_persona_linear_svc_simulation(
             "concentration_c": float(config.concentration_c) if config.concentration_c is not None else None,
             "exclude_feature_groups": list(config.exclude_feature_groups),
             "autoxai_include_all_metrics": bool(config.autoxai_include_all_metrics),
+            "autoxai_enabled": bool(config.autoxai_enabled),
         },
         "config_md5": config_md5,
-        "autoxai_baseline": {
-            "scaling": "Std",
-            "scaling_scope": "instance",
-            "pareto_metrics_already_oriented": bool(pareto_metrics_already_oriented),
-            "objective": [
-                {
-                    "name": term.name,
-                    "metric_key": term.metric_key,
-                    "direction": term.direction,
-                    "weight": term.weight,
-                }
-                for term in autoxai_objective
-            ],
-            "pareto_json_used": str(pareto_path) if pareto_path.exists() else None,
-        },
+        "autoxai_baseline": (
+            {
+                "scaling": "Std",
+                "scaling_scope": "instance",
+                "pareto_metrics_already_oriented": bool(pareto_metrics_already_oriented),
+                "objective": [
+                    {
+                        "name": term.name,
+                        "metric_key": term.metric_key,
+                        "direction": term.direction,
+                        "weight": term.weight,
+                    }
+                    for term in autoxai_objective
+                ],
+                "pareto_json_used": str(pareto_path) if pareto_path.exists() else None,
+            }
+            if config.autoxai_enabled
+            else None
+        ),
         "train_instances": train_ids,
         "test_instances": test_ids,
         "per_user": per_user_summaries,

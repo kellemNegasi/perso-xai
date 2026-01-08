@@ -11,6 +11,7 @@ preference_model:
       clinician: 50
       regulator: 50
       lay: 50
+      auto-xai-persona: 50
     sweep:
       enabled: true
       values: [1, 5, 10, 20, 50, 100, 200]

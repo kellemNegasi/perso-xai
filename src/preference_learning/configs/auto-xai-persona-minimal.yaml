@@ -1,0 +1,22 @@
+persona: auto-xai-persona
+type: hierarchical_dirichlet
+tau: 0.05
+description: >
+  Minimal Auto-XAI persona aligned with the paper's 3-metric objective
+  (robustness, infidelity, and compactness via effective features).
+
+properties:
+  continuity:
+    preference: 2
+    metrics:
+      - relative_input_stability
+
+  correctness:
+    preference: 4
+    metrics:
+      - infidelity
+
+  compactness:
+    preference: 1
+    metrics:
+      - compactness_effective_features

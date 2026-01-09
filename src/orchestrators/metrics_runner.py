@@ -12,6 +12,7 @@ from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 
 import numpy as np
 
+from src.baseline.autoxai_param_optimizer import BayesRangeOptimizer
 from src.validators import TabularDataValidator
 from src.utils.hyperparameter_tuning import HyperparameterTuner
 from src.utils.model_persistence import ModelPersistence
@@ -48,6 +49,14 @@ from .utils import (
     to_serializable,
 )
 from .validation import validate_artifact_compatibility
+from .autoxai_optimization import (
+    aggregate_trial_metrics,
+    build_candidate_scores_reports,
+    build_method_label,
+    compute_objective_term_values,
+    parse_explainer_space,
+    trial_history_objective_score,
+)
 
 LOGGER = logging.getLogger(__name__)
 TABULAR_VALIDATOR = TabularDataValidator(VALIDATION_CFG.get("tabular", {}))
@@ -180,6 +189,7 @@ def run_experiment(
         explainer_configs = [exp_cfg["explainer"]]
     explainer_names = resolve_artifact_list(explainer_configs, "explainer")
     expl_hparam_grids = EXPLAINER_HPARAM_CFG.get("explainers") or {}
+    expl_hpo_cfg = exp_cfg.get("explainer_hpo") or {}
     metric_names = exp_cfg.get("metrics", [])
 
     dataset_spec = DATASET_REGISTRY.get(dataset_name)
@@ -221,7 +231,7 @@ def run_experiment(
             "counts": {
                 "instances": len(instances_data),
                 "base_explainers": len(explainer_names),
-                "explainer_variants": len(explainer_variants),
+                "explainer_variants": int(total_variants),
             },
             "artifacts": {
                 "detailed_explanations": detailed_paths or {},
@@ -370,10 +380,15 @@ def run_experiment(
         metrics_dir.mkdir(parents=True, exist_ok=True)
 
     # Expand explainer names into variants using hyperparameter grids (one variant per combination).
+    # NOTE: this only handles finite categorical grids (lists). Randint-based BO is handled in the main loop.
     def _expand_variants(name: str) -> List[Tuple[str, Dict[str, Any]]]:
         grid = expl_hparam_grids.get(name) or {}
         if not grid:
             return [(name, {})]
+        if any(isinstance(v, dict) and "randint" in v for v in grid.values()):
+            raise ValueError(
+                f"Explainer '{name}' uses randint ranges; enable explainer_hpo and run sequential optimization."
+            )
         from itertools import product
 
         keys = sorted(grid.keys())
@@ -381,18 +396,18 @@ def run_experiment(
         variants: List[Tuple[str, Dict[str, Any]]] = []
         for combo in product(*values):
             override = {k: v for k, v in zip(keys, combo)}
-            parts = [f"{k}-{str(v).replace(' ', '')}" for k, v in override.items()]
-            suffix = "__".join(parts)
-            method_label = f"{name}__{suffix}"
-            variants.append((method_label, override))
+            variants.append((build_method_label(name, override), override))
         return variants
 
-    explainer_variants: List[Tuple[str, str, Dict[str, Any]]] = []
-    for name in explainer_names:
-        for method_label, override in _expand_variants(name):
-            explainer_variants.append((name, method_label, override))
     total_explainers = len(explainer_names)
-    total_variants = len(explainer_variants)
+    total_variants = 0
+    for name in explainer_names:
+        grid = expl_hparam_grids.get(name) or {}
+        has_randint = any(isinstance(v, dict) and "randint" in v for v in grid.values())
+        if has_randint:
+            total_variants += int(expl_hpo_cfg.get("epochs") or 20)
+        else:
+            total_variants += len(_expand_variants(name))
     if log_progress:
         LOGGER.info(
             "Progress: prepared %d explainers (%d total variants)",
@@ -403,7 +418,47 @@ def run_experiment(
     method_artifacts: List[MethodArtifact] = []
     all_dataset_indices: Set[int] = set()
     for expl_index, expl_name in enumerate(explainer_names, start=1):
-        variants = _expand_variants(expl_name)
+        grid = expl_hparam_grids.get(expl_name) or {}
+        has_randint = any(isinstance(v, dict) and "randint" in v for v in grid.values())
+        if not has_randint:
+            variants = _expand_variants(expl_name)
+            hpo_optimizer: Optional[BayesRangeOptimizer] = None
+            hpo_persona = ""
+            hpo_scaling = ""
+            hpo_trial_history: List[str] = []
+            hpo_variant_term_means: Dict[str, Dict[str, float]] = {}
+            hpo_trials: List[Dict[str, Any]] = []
+            hpo_epochs = len(variants)
+        else:
+            mode = str(expl_hpo_cfg.get("mode") or "gp").lower()
+            hpo_epochs = int(expl_hpo_cfg.get("epochs") or 20)
+            seed = int(expl_hpo_cfg.get("seed") or 0)
+            init_points = int(expl_hpo_cfg.get("init_points") or 5)
+            if mode != "gp":
+                raise ValueError(
+                    f"explainer_hpo.mode must be 'gp' when using randint ranges; got {mode!r}."
+                )
+            if hpo_epochs <= 0:
+                raise ValueError("explainer_hpo.epochs must be positive.")
+            if not metric_objs:
+                raise ValueError(
+                    "explainer_hpo requires metrics to be enabled so an objective can be evaluated."
+                )
+            hpo_persona = str(expl_hpo_cfg.get("persona") or "autoxai").strip().lower()
+            hpo_scaling = str(expl_hpo_cfg.get("scaling") or "Std")
+            space = parse_explainer_space(
+                grid, n_features=len(feature_names) or int(dataset.X_train.shape[1])
+            )
+            hpo_optimizer = BayesRangeOptimizer(
+                space=space,
+                seed=seed,
+                n_initial_points=init_points,
+            )
+            hpo_trial_history = []
+            hpo_variant_term_means = {}
+            hpo_trials = []
+            variants = []  # handled sequentially below
+
         base_label = expl_name
 
         if log_progress:
@@ -490,7 +545,11 @@ def run_experiment(
                     except (TypeError, ValueError):
                         continue
 
-        LOGGER.info("Generating explanations with '%s' (%d variants)", expl_name, len(variants))
+        LOGGER.info(
+            "Generating explanations with '%s' (%d variants)",
+            expl_name,
+            hpo_epochs if hpo_optimizer is not None else len(variants),
+        )
 
         combined_dataset_mapping: Dict[int, List[Tuple[int, Dict[str, Any]]]] = {}
         combined_metric_records: List[Dict[str, Any]] = []
@@ -502,14 +561,23 @@ def run_experiment(
         combined_detail_path: Optional[Path] = None
         combined_metrics_path: Optional[Path] = None
 
-        for variant_index, (method_label, param_override) in enumerate(variants, start=1):
-            if log_progress and len(variants) > 1:
+        def _iter_variants():
+            if hpo_optimizer is None:
+                for item in variants:
+                    yield item
+                return
+            for _ in range(hpo_epochs):
+                params = hpo_optimizer.ask()
+                yield build_method_label(expl_name, params), params
+
+        for variant_index, (method_label, param_override) in enumerate(_iter_variants(), start=1):
+            if log_progress and (hpo_epochs > 1):
                 LOGGER.info(
                     "[progress] %s variant %d/%d (%.1f%%)",
                     base_label,
                     variant_index,
-                    len(variants),
-                    100.0 * variant_index / len(variants),
+                    hpo_epochs,
+                    100.0 * variant_index / max(1, hpo_epochs),
                 )
             # Gather explanations: reuse cached for this variant when available, otherwise compute.
             variant_explanations: List[Dict[str, Any]] = []
@@ -605,6 +673,40 @@ def run_experiment(
                         metric_entry["method_variant"] = method_label
                         combined_metric_records.append(metric_entry)
 
+                if hpo_optimizer is not None:
+                    trial_metrics = aggregate_trial_metrics(
+                        batch_metrics=batch_metrics, instance_metrics=instance_metrics
+                    )
+                    persona = hpo_persona or "autoxai"
+                    scaling = hpo_scaling or "Std"
+                    term_values = compute_objective_term_values(metrics=trial_metrics, persona=persona)
+                    if not term_values:
+                        score = float("-inf")
+                    else:
+                        # Track per-variant mean term values and evaluate AutoXAI-like trial-history objective.
+                        hpo_variant_term_means[method_label] = term_values
+                        score = trial_history_objective_score(
+                            history=hpo_trial_history,
+                            candidate=method_label,
+                            variant_term_means=hpo_variant_term_means,
+                            persona=persona,
+                            scaling=scaling,
+                        )
+                        score = float(score) if score is not None else float("-inf")
+                    hpo_trial_history.append(method_label)
+                    hpo_trials.append(
+                        {
+                            "trial_index": int(variant_index),
+                            "method_variant": method_label,
+                            "hyperparameters": dict(param_override),
+                            "objective_terms": term_values,
+                            "aggregated_score": float(score) if np.isfinite(score) else float("-inf"),
+                        }
+                    )
+                    if not np.isfinite(score):
+                        score = -1e9
+                    hpo_optimizer.tell(param_override, float(score))
+
         combined_detail_path = detailed_dir / f"{base_label}_detailed_explanations.json"
         checkpoint_explanations(
             method_label=base_label,
@@ -617,6 +719,29 @@ def run_experiment(
         )
 
         if metric_objs and metrics_dir is not None:
+            if hpo_optimizer is not None:
+                overall_scores, per_instance_scores = build_candidate_scores_reports(
+                    combined_metric_records=combined_metric_records,
+                    method_label=base_label,
+                    persona=hpo_persona or "autoxai",
+                    scaling=hpo_scaling or "Std",
+                    trial_history=hpo_trial_history,
+                )
+                hpo_report = {
+                    "mode": "gp",
+                    "epochs": int(hpo_epochs),
+                    "seed": int(expl_hpo_cfg.get("seed") or 0),
+                    "init_points": int(expl_hpo_cfg.get("init_points") or 5),
+                    "persona": (hpo_persona or "autoxai"),
+                    "scaling": (hpo_scaling or "Std"),
+                    "trial_history": list(hpo_trial_history),
+                    "trials": list(hpo_trials),
+                    "candidate_scores_overall_trial_scope": overall_scores,
+                    "candidate_scores_per_instance_trial_scope": per_instance_scores,
+                }
+            else:
+                hpo_report = None
+
             metrics_cache_str = persist_metric_results(
                 metrics_dir=metrics_dir,
                 dataset_name=dataset_name,
@@ -626,6 +751,7 @@ def run_experiment(
                 batch_metrics=combined_batch_metrics,
                 metric_metadata=metric_metadata,
                 batch_metrics_by_variant=batch_metrics_by_variant,
+                extra={"hpo": hpo_report} if hpo_report is not None else None,
             )
             if metrics_cache_str:
                 combined_metrics_path = Path(metrics_cache_str)

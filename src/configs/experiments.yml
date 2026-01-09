@@ -18,6 +18,31 @@ openml_benchmark_defaults: &openml_benchmark_defaults
     - consistency_local
     - relative_input_stability
 
+autoxai_benchmark_defaults: &autoxai_benchmark_defaults
+  explainers:
+    - key: autoxai_shap
+    - key: autoxai_lime
+  explainer_hpo:
+    mode: gp
+    epochs: 20
+    seed: 0
+    init_points: 5
+    persona: autoxai
+    scaling: Std
+  metrics:
+    - correctness
+    - monotonicity_correlation
+    - infidelity
+    - continuity_stability
+    - completeness_deletion
+    - compactness_size
+    - covariate_complexity
+    - contrastivity_ssim
+    - confidence
+    - non_sensitivity
+    - consistency_local
+    - relative_input_stability
+
 openml_adult_suite:
   dataset:
     key: openml_adult_income
@@ -31,6 +56,20 @@ openml_adult_suite:
   logging:
       progress: true
   <<: *openml_benchmark_defaults
+
+autoxai_openml_adult_suite:
+  dataset:
+    key: openml_adult_income
+  models:
+    - key: decision_tree
+    - key: random_forest
+    - key: gradient_boosting
+    - key: mlp_classifier
+    - key: logistic_regression
+    - key: svm_rbf
+  logging:
+      progress: true
+  <<: *autoxai_benchmark_defaults
 
 openml_bank_suite:
   dataset:
@@ -46,6 +85,20 @@ openml_bank_suite:
       progress: true
   <<: *openml_benchmark_defaults
 
+autoxai_openml_bank_suite:
+  dataset:
+    key: openml_bank_marketing
+  models:
+    - key: decision_tree
+    - key: random_forest
+    - key: gradient_boosting
+    - key: mlp_classifier
+    - key: logistic_regression
+    - key: svm_rbf
+  logging:
+      progress: true
+  <<: *autoxai_benchmark_defaults
+
 openml_german_suite:
   dataset:
     key: openml_german_credit
@@ -60,6 +113,20 @@ openml_german_suite:
       progress: true
   <<: *openml_benchmark_defaults
 
+autoxai_openml_german_suite:
+  dataset:
+    key: openml_german_credit
+  models:
+    - key: decision_tree
+    - key: random_forest
+    - key: gradient_boosting
+    - key: mlp_classifier
+    - key: logistic_regression
+    - key: svm_rbf
+  logging:
+      progress: true
+  <<: *autoxai_benchmark_defaults
+
 open_compas_suite:
   dataset:
     key: open_compas
@@ -73,3 +140,17 @@ open_compas_suite:
   logging:
       progress: true
   <<: *openml_benchmark_defaults
+
+autoxai_open_compas_suite:
+  dataset:
+    key: open_compas
+  models:
+    - key: decision_tree
+    - key: random_forest
+    - key: gradient_boosting
+    - key: mlp_classifier
+    - key: logistic_regression
+    - key: svm_rbf
+  logging:
+      progress: true
+  <<: *autoxai_benchmark_defaults

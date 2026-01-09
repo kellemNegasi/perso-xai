@@ -97,12 +97,12 @@ class InfidelityEvaluator(MetricCapabilities):
             idx = metric_input.explanation_idx
             if not (0 <= idx < len(explanations)):
                 return {"infidelity": 0.0}
-            score = self._infidelity_score(metric_input.model, explanations[idx], rng)
+            score = self._infidelity_score(metric_input.model, explanations[idx], rng, dataset=metric_input.dataset)
             return {"infidelity": float(score) if score is not None else 0.0}
 
         scores: List[float] = []
         for explanation in explanations:
-            score = self._infidelity_score(metric_input.model, explanation, rng)
+            score = self._infidelity_score(metric_input.model, explanation, rng, dataset=metric_input.dataset)
             if score is not None:
                 scores.append(score)
 
@@ -118,6 +118,8 @@ class InfidelityEvaluator(MetricCapabilities):
         model: Any,
         explanation: Dict[str, Any],
         rng: np.random.Generator,
+        *,
+        dataset: Any | None = None,
     ) -> Optional[float]:
         attrs = self._feature_importance_vector(explanation)
         if attrs is None or attrs.size == 0:
@@ -136,7 +138,7 @@ class InfidelityEvaluator(MetricCapabilities):
             )
             return None
 
-        baseline = self._baseline_vector(explanation, instance)
+        baseline = self._baseline_vector(explanation, instance, dataset=dataset)
 
         try:
             orig_pred = self._model_prediction(model, instance)
@@ -235,13 +237,25 @@ class InfidelityEvaluator(MetricCapabilities):
         arr = np.asarray(candidate, dtype=float).reshape(-1)
         return arr.copy()
 
-    def _baseline_vector(self, explanation: Dict[str, Any], instance: np.ndarray) -> np.ndarray:
+    def _baseline_vector(
+        self,
+        explanation: Dict[str, Any],
+        instance: np.ndarray,
+        *,
+        dataset: Any | None = None,
+    ) -> np.ndarray:
         metadata = explanation.get("metadata") or {}
         baseline = metadata.get("baseline_instance")
         if baseline is not None:
             base_arr = np.asarray(baseline, dtype=float).reshape(-1)
             if base_arr.shape == instance.shape:
                 return base_arr
+        if dataset is not None:
+            X_train = getattr(dataset, "X_train", None)
+            if X_train is not None:
+                X_arr = np.asarray(X_train, dtype=float)
+                if X_arr.ndim >= 2 and X_arr.shape[1] == instance.shape[0]:
+                    return np.mean(X_arr, axis=0).reshape(-1)
         return np.full_like(instance, self.default_baseline, dtype=float)
 
     def _feature_scale(self, instance: np.ndarray) -> np.ndarray:

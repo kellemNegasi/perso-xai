@@ -24,6 +24,7 @@ class SHAPExplainer(BaseExplainer):
         self._shap = None
         self._explainer = None
         self._is_tree = False
+        self._explainer_type: Optional[str] = None  # "tree" | "kernel" | "sampling"
         self._background: Optional[np.ndarray] = None
 
     def fit(self, X: ArrayLike, y: Optional[ArrayLike] = None) -> None:
@@ -53,15 +54,33 @@ class SHAPExplainer(BaseExplainer):
         if self._is_tree:
             # Exact fast SHAP for tree ensembles
             self._explainer = self._shap.TreeExplainer(self._underlying_model())
+            self._explainer_type = "tree"
         else:
-            # KernelSHAP with small background
+            # Model-agnostic SHAP with small background.
+            explainer_type = str(self._expl_cfg.get("shap_explainer_type", "kernel")).strip().lower()
+            if explainer_type in {"kernelexplainer", "kernel"}:
+                explainer_type = "kernel"
+            elif explainer_type in {"samplingexplainer", "sampling"}:
+                explainer_type = "sampling"
+            else:
+                raise ValueError(
+                    "experiment.explanation.shap_explainer_type must be one of: "
+                    "'kernel'|'KernelExplainer'|'sampling'|'SamplingExplainer'. "
+                    f"Got {self._expl_cfg.get('shap_explainer_type')!r}."
+                )
+
             bsize = int(self._expl_cfg.get("background_sample_size", 100))
             bsize = min(bsize, len(X_np))
             rng = np.random.default_rng(self.random_state)
             idx = rng.choice(len(X_np), size=bsize, replace=False)
             self._background = X_np[idx]
             predict_fn = self._kernel_predict_fn()
-            self._explainer = self._shap.KernelExplainer(predict_fn, self._background)
+            if explainer_type == "sampling":
+                self._explainer = self._shap.SamplingExplainer(predict_fn, self._background)
+                self._explainer_type = "sampling"
+            else:
+                self._explainer = self._shap.KernelExplainer(predict_fn, self._background)
+                self._explainer_type = "kernel"
 
     def explain_instance(self, instance: InstanceLike) -> Dict[str, Any]:
         """
@@ -79,13 +98,13 @@ class SHAPExplainer(BaseExplainer):
 
         # Compute SHAP values
         if self._is_tree:
-            shap_vals_raw, t_shap = self._timeit(self._explainer.shap_values, inst2d, silent=True)
+            shap_vals_raw, t_shap = self._timeit(self._shap_values, inst2d)
             shap_vals = self._select_shap_values(shap_vals_raw, pred_numeric)
             expected = self._explainer.expected_value
             exp_val = self._select_expected_value(expected, pred_numeric)
         else:
             # KernelExplainer expects small batches; just one instance
-            shap_vals_raw, t_shap = self._timeit(self._explainer.shap_values, inst2d,silent=True)
+            shap_vals_raw, t_shap = self._timeit(self._shap_values, inst2d)
             shap_vals = self._select_shap_values(shap_vals_raw, pred_numeric)
             expected = self._explainer.expected_value
             exp_val = self._select_expected_value(expected, pred_numeric)
@@ -121,7 +140,7 @@ class SHAPExplainer(BaseExplainer):
         preds = np.asarray(self._predict(X_np))
         preds_numeric = np.asarray(self._predict_numeric(X_np))
         proba = self._predict_proba(X_np)
-        shap_vals_raw = self._explainer.shap_values(X_np, silent=True)
+        shap_vals_raw = self._shap_values(X_np)
         shap_vals = self._select_shap_values(shap_vals_raw, preds_numeric)
         expected = self._explainer.expected_value
 
@@ -155,6 +174,66 @@ class SHAPExplainer(BaseExplainer):
     # -------------------------------------------------------------------------
     # Helpers
     # -------------------------------------------------------------------------
+
+    def _shap_values(self, X: np.ndarray):
+        """
+        Call SHAP's `.shap_values(...)` with optional method-specific arguments.
+
+        Supported config (under `experiment.explanation`):
+          - shap_nsamples: int (passed as `nsamples`)
+          - shap_l1_reg: str (KernelExplainer only; passed as `l1_reg`)
+          - shap_l1_reg_k: int (used when shap_l1_reg == "num_features")
+        """
+        if self._explainer is None:
+            raise RuntimeError("SHAP explainer not initialized; call fit() first.")
+
+        kwargs: Dict[str, Any] = {}
+        nsamples = self._expl_cfg.get("shap_nsamples")
+        if nsamples is not None:
+            if self._explainer_type in {"kernel", "sampling"}:
+                kwargs["nsamples"] = int(nsamples)
+            else:
+                self.logger.debug(
+                    "Ignoring experiment.explanation.shap_nsamples=%r because explainer_type=%r.",
+                    nsamples,
+                    self._explainer_type,
+                )
+
+        l1_reg = self._expl_cfg.get("shap_l1_reg")
+        if l1_reg is not None:
+            if self._explainer_type == "kernel":
+                if isinstance(l1_reg, str):
+                    token = l1_reg.strip()
+                    lowered = token.lower()
+                    if lowered in {"auto", "aic", "bic"}:
+                        kwargs["l1_reg"] = lowered
+                    elif lowered == "num_features":
+                        n_features = int(np.asarray(X).shape[1])
+                        k_raw = self._expl_cfg.get("shap_l1_reg_k")
+                        if k_raw is None:
+                            rng = np.random.default_rng(self.random_state)
+                            k_value = int(rng.integers(low=1, high=max(2, n_features + 1)))
+                        else:
+                            k_value = int(k_raw)
+                        k_value = max(1, min(k_value, max(1, n_features)))
+                        kwargs["l1_reg"] = f"num_features({k_value})"
+                    else:
+                        # Pass through, e.g. "num_features(10)" or any SHAP-supported string.
+                        kwargs["l1_reg"] = token
+                else:
+                    kwargs["l1_reg"] = l1_reg
+            else:
+                self.logger.debug(
+                    "Ignoring experiment.explanation.shap_l1_reg=%r because explainer_type=%r.",
+                    l1_reg,
+                    self._explainer_type,
+                )
+
+        # Some SHAP versions accept `silent`; others don't. Prefer silent if supported.
+        try:
+            return self._explainer.shap_values(X, silent=True, **kwargs)
+        except TypeError:
+            return self._explainer.shap_values(X, **kwargs)
 
     def _underlying_model(self):
         """Return raw model object (unwrap simple wrappers if present)."""

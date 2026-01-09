@@ -7,6 +7,24 @@ explainers:
     lime_kernel_width: [1.5, 2.0, 3.0]
   shap:
     background_sample_size: [50, 100, 150]
+
+  # AutoXAI-style explainer hyperparameters (prefixed to keep them separate).
+  autoxai_lime:
+    # AutoXAI: num_samples ~ randint(10, 10000)
+    lime_num_samples:
+      randint: [10, 10000]
+
+  autoxai_shap:
+    # AutoXAI: explainer type in {KernelExplainer, SamplingExplainer}
+    shap_explainer_type: [kernel, sampling]
+    # AutoXAI: nsamples ~ randint(10, 2048)
+    shap_nsamples:
+      randint: [10, 2048]
+    # AutoXAI: l1_reg in {"auto","aic","bic","num_features(k)"} (Kernel only)
+    shap_l1_reg: [Auto, aic, bic, num_features]
+    # Only used when shap_l1_reg == "num_features" (clamped to <= d)
+    shap_l1_reg_k:
+      randint: [1, n_features]
   integrated_gradients:
     ig_steps: [20, 40, 60]
   causal_shap:

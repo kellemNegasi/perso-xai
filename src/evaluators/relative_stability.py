@@ -50,6 +50,7 @@ class RelativeInputStabilityEvaluator(MetricCapabilities):
         num_samples: int = 10,
         noise_scale: float = 0.01,
         eps_min: float = 1e-6,
+        bounded: bool = True,
         random_state: Optional[int] = 42,
     ) -> None:
         self.metric_key = metric_key or "relative_input_stability"
@@ -57,6 +58,7 @@ class RelativeInputStabilityEvaluator(MetricCapabilities):
         self.num_samples = max(1, int(num_samples))
         self.noise_scale = float(max(0.0, noise_scale))
         self.eps_min = float(max(1e-12, eps_min))
+        self.bounded = bool(bounded)
         self.random_state = random_state
         self.logger = logging.getLogger(__name__)
 
@@ -159,7 +161,15 @@ class RelativeInputStabilityEvaluator(MetricCapabilities):
             denom = max(denom, self.eps_min)
             ratios.append(float(rel_attr / denom))
 
-        return max(ratios) if ratios else None
+        if not ratios:
+            return None
+
+        score = max(ratios)
+        if not self.bounded:
+            return score
+
+        score = max(0.0, float(score))
+        return score / (1.0 + score) # to prevent unbounded growth, map to [0, 1).
 
     def _rerun_explainer(
         self,

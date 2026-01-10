@@ -29,7 +29,7 @@ autoxai_shap:
         level: WARNING
         library_level: WARNING
       explanation:
-        max_instances: 100
+        max_instances: 40
         method_max_instances: 200
         sampling_strategy: random
         random_state: 42
@@ -60,7 +60,7 @@ autoxai_lime:
   params:
     experiment:
       explanation:
-        max_instances: 100
+        max_instances: 40
         method_max_instances: 200
         sampling_strategy: random
         random_state: 42

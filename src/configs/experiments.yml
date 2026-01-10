@@ -24,9 +24,9 @@ autoxai_benchmark_defaults: &autoxai_benchmark_defaults
     - key: autoxai_lime
   explainer_hpo:
     mode: gp
-    epochs: 20
+    epochs: 25
     seed: 0
-    init_points: 5
+    init_points: 9
     persona: autoxai
     scaling: Std
   metrics:

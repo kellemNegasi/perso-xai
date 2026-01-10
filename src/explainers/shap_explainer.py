@@ -229,11 +229,34 @@ class SHAPExplainer(BaseExplainer):
                     self._explainer_type,
                 )
 
-        # Some SHAP versions accept `silent`; others don't. Prefer silent if supported.
+        def _call_shap_values(call_kwargs: Dict[str, Any]):
+            # Some SHAP versions accept `silent`; others don't. Prefer silent if supported.
+            try:
+                return self._explainer.shap_values(X, silent=True, **call_kwargs)
+            except TypeError:
+                return self._explainer.shap_values(X, **call_kwargs)
+
         try:
-            return self._explainer.shap_values(X, silent=True, **kwargs)
-        except TypeError:
-            return self._explainer.shap_values(X, **kwargs)
+            return _call_shap_values(kwargs)
+        except ValueError as e:
+            # KernelExplainer's default/auto regularization can use LassoLarsIC ("aic"/"bic"),
+            # which fails when the regression sample count is < number of features.
+            msg = str(e)
+            if (
+                self._explainer_type == "kernel"
+                and "LassoLarsIC" in msg
+                and "number of samples is smaller than the number of features" in msg
+            ):
+                n_features = int(np.asarray(X).shape[1])
+                k_value = max(1, min(10, n_features))
+                fallback_kwargs = dict(kwargs)
+                fallback_kwargs["l1_reg"] = f"num_features({k_value})"
+                self.logger.warning(
+                    "KernelSHAP failed with LassoLarsIC (likely nsamples < n_features); retrying with l1_reg=%r.",
+                    fallback_kwargs["l1_reg"],
+                )
+                return _call_shap_values(fallback_kwargs)
+            raise
 
     def _underlying_model(self):
         """Return raw model object (unwrap simple wrappers if present)."""

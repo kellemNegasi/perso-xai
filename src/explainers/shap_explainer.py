@@ -245,7 +245,10 @@ class SHAPExplainer(BaseExplainer):
             if (
                 self._explainer_type == "kernel"
                 and "LassoLarsIC" in msg
-                and "number of samples is smaller than the number of features" in msg
+                and (
+                    "number of samples is smaller than the number of features" in msg
+                    or "samples is smaller than the number of features" in msg
+                )
             ):
                 n_features = int(np.asarray(X).shape[1])
                 k_value = max(1, min(10, n_features))
@@ -269,12 +272,41 @@ class SHAPExplainer(BaseExplainer):
 
     def _kernel_predict_fn(self):
         """Prediction function for KernelSHAP (classification-friendly)."""
+        def _coerce_2d(arr: Any) -> np.ndarray:
+            out = np.asarray(arr)
+            if out.ndim == 1:
+                out = out.reshape(1, -1)
+            return out
+
         if hasattr(self.model, "predict_proba"):
             target_idx = self._select_target_class_index()
             if target_idx is not None:
-                return lambda x, idx=target_idx: self.model.predict_proba(x)[:, idx]
-            return lambda x: self.model.predict_proba(x)  # returns (n, C)
-        return lambda x: self.model.predict_numeric(x)  # shape (n,) or (n, 1)
+                def _predict_proba_class(x, idx=target_idx):
+                    x2d = _coerce_2d(x)
+                    if x2d.shape[0] == 0:
+                        # SHAP may call the predict function with an empty mask batch; sklearn
+                        # preprocessors (e.g. StandardScaler) reject 0-row inputs.
+                        return np.empty((0,), dtype=float)
+                    return self.model.predict_proba(x2d)[:, idx]
+
+                return _predict_proba_class
+
+            def _predict_proba_all(x):
+                x2d = _coerce_2d(x)
+                if x2d.shape[0] == 0:
+                    n_classes = len(getattr(self.model, "classes_", []) or [])
+                    return np.empty((0, n_classes), dtype=float)
+                return self.model.predict_proba(x2d)  # returns (n, C)
+
+            return _predict_proba_all
+
+        def _predict_numeric(x):
+            x2d = _coerce_2d(x)
+            if x2d.shape[0] == 0:
+                return np.empty((0,), dtype=float)
+            return self.model.predict_numeric(x2d)  # shape (n,) or (n, 1)
+
+        return _predict_numeric
 
     def _select_target_class_index(self) -> Optional[int]:
         """Return the class index SHAP should explain for classification models."""

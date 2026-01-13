@@ -37,7 +37,7 @@ from src.datasets.tabular import TabularDataset
 from src.orchestrators.registry import DatasetRegistry, ExplainerRegistry
 from src.utils.landmarking import compute_landmarking_features
 
-DEFAULT_RESULTS_ROOT = Path("results") / "hc_combo_20251228_050331"
+DEFAULT_RESULTS_ROOT = Path("results") / "hc_combo_20260110_024805"
 DEFAULT_METADATA_DIR = DEFAULT_RESULTS_ROOT / "metadata"
 DEFAULT_DATASETS = (
     "open_compas",

@@ -299,8 +299,12 @@ def _resolve_experiment_mode(args: argparse.Namespace) -> tuple[list[str], bool,
         return ["auto-xai-persona"], include_all_metrics, True
     return list(PERSONAS), bool(args.autoxai_include_all_metrics), False
 
-
+# Resolve persona config path, with special case for auto-xai-persona in autoxai-comparison mode.
 def _resolve_persona_config_path(persona: str, args: argparse.Namespace) -> Path:
+    # TODO Some cleanup might be needed here a little bit confusing
+    # Note: "auto-xai-persona" persona represents two different configurations depending on the experiment mode.
+    # if in autoxai-comparison mode with auto-xai metric mode, use minimal config. i.e auto-xai-persona-minimal.yaml
+    # else use the regular auto-xai-persona config which uses all metrics. i.e auto-xai-persona.yaml
     if (
         persona == "auto-xai-persona"
         and args.experiment_mode == "autoxai-comparison"

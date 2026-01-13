@@ -17,6 +17,7 @@ set -euo pipefail
 #   TUNING_OUTPUT_DIR=...       # optional override (defaults to <MODEL_STORE_DIR>/tuning_results)
 
 RUN_ID="${1:-hc_combo_$(date +%Y%m%d_%H%M%S)}"
+RUN_ID="hc_combo_20260110_024805_replacemnt"  # fixed for testing
 
 if [[ -z "${VIRTUAL_ENV:-}" ]]; then
   if [[ -f ".venv/bin/activate" ]]; then
@@ -35,9 +36,9 @@ if [[ -n "${SUITES:-}" ]]; then
 else
   SUITES_ARR=(
     # autoxai_openml_adult_suite
-    autoxai_openml_bank_suite
+    # autoxai_openml_bank_suite
     autoxai_openml_german_suite
-    autoxai_open_compas_suite
+    # autoxai_open_compas_suite
   )
 fi
 
@@ -45,12 +46,12 @@ if [[ -n "${MODELS:-}" ]]; then
   read -r -a MODELS_ARR <<<"${MODELS}"
 else
   MODELS_ARR=(
-    decision_tree
-    random_forest
+    # decision_tree
+    # random_forest
     mlp_classifier
-    gradient_boosting
-    logistic_regression
-    svm_rbf
+    # gradient_boosting
+    # logistic_regression
+    # svm_rbf
   )
 fi
 JOBS="${JOBS:-$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 4)}"

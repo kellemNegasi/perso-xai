@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Sequence, Set, Tuple
 
@@ -26,7 +27,7 @@ DEFAULT_RESULTS_ROOT = Path("results") / "hc_combo_20251228_050331"
 DEFAULT_RESULTS_DIR = DEFAULT_RESULTS_ROOT
 DEFAULT_DETAILED_DIR = DEFAULT_RESULTS_ROOT / "detailed_explanations"
 DEFAULT_METRICS_DIR = DEFAULT_RESULTS_ROOT / "metrics_results"
-DEFAULT_PARETO_DIR = DEFAULT_RESULTS_ROOT / "pareto_fronts"
+DEFAULT_PARETO_DIR = DEFAULT_RESULTS_ROOT / "pareto_fronts_new"
 
 DEFAULT_DATASETS = (
     "open_compas",
@@ -245,6 +246,9 @@ def clean_metrics(raw_metrics: Dict[str, Any] | None) -> Dict[str, float]:
             val = float(value)
         except (TypeError, ValueError):
             continue
+        # Drop the entire candidate if any metric value is non-finite (NaN/inf).
+        if not math.isfinite(val):
+            return {}
 
         # Convert minimize objectives to "maximize" by negating.
         if key in MINIMIZE_METRICS:

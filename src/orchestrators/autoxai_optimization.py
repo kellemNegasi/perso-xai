@@ -19,7 +19,16 @@ from src.baseline.autoxai_scoring import compute_scores, _trial_objective_value
 def build_method_label(base: str, params: Mapping[str, Any]) -> str:
     if not params:
         return base
-    parts = [f"{k}-{str(v).replace(' ', '')}" for k, v in sorted(params.items())]
+    cleaned = dict(params)
+    shap_type = str(cleaned.get("shap_explainer_type") or "").strip().lower()
+    if shap_type in {"sampling", "samplingexplainer"}:
+        cleaned.pop("shap_l1_reg", None)
+        cleaned.pop("shap_l1_reg_k", None)
+    elif shap_type in {"kernel", "kernelexplainer"}:
+        l1_reg = str(cleaned.get("shap_l1_reg") or "").strip().lower()
+        if l1_reg != "num_features":
+            cleaned.pop("shap_l1_reg_k", None)
+    parts = [f"{k}-{str(v).replace(' ', '')}" for k, v in sorted(cleaned.items())]
     return f"{base}__{'__'.join(parts)}"
 
 
@@ -183,4 +192,3 @@ def build_candidate_scores_reports(
         per_instance_scores.extend(one)
 
     return serialize_candidate_scores(overall), serialize_candidate_scores(per_instance_scores)
-

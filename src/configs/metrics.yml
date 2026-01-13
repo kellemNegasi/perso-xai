@@ -51,7 +51,8 @@ relative_input_stability:
     max_instances: 5
     num_samples: 10
     noise_scale: 0.01
-    eps_min: 1.0e-06
+    eps_min: 1.0e-03
+    bounded: true
 
 consistency_local:
   module: src.evaluators.consistency
@@ -96,7 +97,7 @@ infidelity:
     features_per_sample: 3
     default_baseline: 0.0
     abs_attributions: false
-    normalise: false
+    normalise: true
     noise_scale: 0.0
 
 confidence:

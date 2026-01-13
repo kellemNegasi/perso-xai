@@ -21,6 +21,9 @@ METRICS_DIR="${RESULTS_DIR}/metrics_results"
 
 mkdir -p "${DETAIL_DIR}" "${METRICS_DIR}"
 
+MODEL_STORE_DIR="${MODEL_STORE_DIR:-saved_models}"
+TUNING_OUTPUT_DIR="${TUNING_OUTPUT_DIR:-${MODEL_STORE_DIR}/tuning_results}"
+
 	cmd=(
 	  python -m src.cli.main "${EXPERIMENT_SUITE}"
 	  --reuse-trained-models
@@ -34,7 +37,8 @@ mkdir -p "${DETAIL_DIR}" "${METRICS_DIR}"
 	  --metrics-output-dir "${METRICS_DIR}"
 	  --output-dir "${RESULTS_DIR}"
 	  --experiment-results-subdir experiment_results
-	  --model-store-dir saved_models
+	  --model-store-dir "${MODEL_STORE_DIR}"
+	  --tuning-output-dir "${TUNING_OUTPUT_DIR}"
 	  --log-level INFO
 	  --model "${MODEL_NAME}"
 	)

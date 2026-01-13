@@ -19,6 +19,25 @@ shap:
         random_state: 42
         background_sample_size: 100
 
+autoxai_shap:
+  <<: *tabular_explainer
+  type: shap
+  description: "AutoXAI SHAP search space (Kernel/Sampling; nsamples; l1_reg)."
+  params:
+    experiment:
+      logging:
+        level: WARNING
+        library_level: WARNING
+      explanation:
+        max_instances: 40
+        method_max_instances: 200
+        sampling_strategy: random
+        random_state: 42
+        background_sample_size: 100
+        shap_explainer_type: kernel
+        shap_nsamples: 100
+        shap_l1_reg: auto
+
 lime:
   <<: *tabular_explainer
   type: lime
@@ -31,6 +50,21 @@ lime:
         sampling_strategy: random
         random_state: 42
         lime_num_samples: 100
+        lime_noise_scale: 0.1
+        lime_kernel_width: 2.0
+
+autoxai_lime:
+  <<: *tabular_explainer
+  type: lime
+  description: "AutoXAI LIME search space (num_samples)."
+  params:
+    experiment:
+      explanation:
+        max_instances: 40
+        method_max_instances: 200
+        sampling_strategy: random
+        random_state: 42
+        lime_num_samples: 1000
         lime_noise_scale: 0.1
         lime_kernel_width: 2.0
 

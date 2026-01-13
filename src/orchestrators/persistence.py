@@ -85,7 +85,7 @@ def checkpoint_explanations(
                     explanation.get("attributions", [])
                 ).tolist(),
                 "metadata": to_serializable(meta) if meta else {},
-                "method_variant": explanation.get("method") or method_label,
+                "method_variant": meta.get("method_variant") or explanation.get("method") or method_label,
             }
             gen_time = explanation.get("generation_time")
             if gen_time is not None:
@@ -302,6 +302,7 @@ def write_metric_results(
     batch_metrics: Dict[str, float],
     metric_metadata: Dict[str, Dict[str, Any]],
     batch_metrics_by_variant: Optional[Dict[str, Dict[str, float]]] = None,
+    extra: Optional[Dict[str, Any]] = None,
 ) -> Optional[str]:
     """Write per-method metric outputs to disk and return the file path."""
     if not instances and not batch_metrics:
@@ -317,6 +318,12 @@ def write_metric_results(
     }
     if batch_metrics_by_variant:
         payload["batch_metrics_by_variant"] = batch_metrics_by_variant
+    if extra:
+        for key, value in extra.items():
+            if key in payload:
+                LOGGER.warning("Skipping extra payload key %s (already present).", key)
+                continue
+            payload[key] = value
     file_path = metrics_dir / f"{method_label}_metrics.json"
     with file_path.open("w", encoding="utf-8") as handle:
         json.dump(to_serializable(payload), handle, indent=2)

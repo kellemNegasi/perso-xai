@@ -10,9 +10,9 @@ set -euo pipefail
 # - target_path: optional dataset/model path to limit processing.
 #                When omitted, every dataset/model under metrics_dir is processed.
 
-RESULTS_ROOT=${RESULTS_ROOT:-results/hc_combo_20251228_050331}
+RESULTS_ROOT=${RESULTS_ROOT:-results/hc_combo_20260110_024805}
 METRICS_DIR=${1:-${RESULTS_ROOT}/metrics_results}
-OUTPUT_DIR=${2:-${RESULTS_ROOT}/pareto_fronts}
+OUTPUT_DIR=${2:-${RESULTS_ROOT}/pareto_fronts_new}
 TARGET_PATH=${3:-}
 
 PYTHON_BIN=${PYTHON_BIN:-python3}
@@ -22,6 +22,7 @@ CMD=(
   --mode metrics
   --metrics-dir "$METRICS_DIR"
   --output-dir "$OUTPUT_DIR"
+  --methods autoxai_lime autoxai_shap
 )
 
 if [[ -n "$TARGET_PATH" ]]; then

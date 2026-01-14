@@ -218,6 +218,12 @@ def _build_training_differences(
             continue
         features.extend(diff_matrix)
         labels.extend(diff_labels)
+    if len(features) != len(labels):
+        raise ValueError(
+            "Inconsistent training data lengths when building difference vectors: "
+            f"features={len(features)} labels={len(labels)}. "
+            "This can happen if encoded candidates contain duplicate method_variant rows."
+        )
     if not features:
         return pd.DataFrame(columns=feature_columns), pd.Series(dtype="int64")
     X = pd.DataFrame(features, columns=feature_columns)
@@ -230,15 +236,23 @@ def _differences_for_instance(
     pair_df: pd.DataFrame,
     feature_columns: Sequence[str],
 ) -> Tuple[np.ndarray, List[int]]:
-    candidate_matrix = (
-        instance_df.set_index("method_variant")[list(feature_columns)].astype(float)
-    )
+    instance_df = _dedupe_candidates_by_variant(instance_df)
+    candidate_matrix = instance_df.set_index("method_variant")[list(feature_columns)].astype(float)
+    if not candidate_matrix.index.is_unique:
+        # Defensive fallback: `_dedupe_candidates_by_variant` should have ensured uniqueness.
+        LOGGER.warning(
+            "Duplicate method_variant values remain after de-duplication; averaging feature rows."
+        )
+        candidate_matrix = candidate_matrix.groupby(level=0).mean()
     rows: List[np.ndarray] = []
     labels: List[int] = []
     for _, row in pair_df.iterrows():
         method_a = row.get("pair_1")
         method_b = row.get("pair_2")
         label = row.get("label")
+        if method_a == method_b:
+            LOGGER.warning("Skipping degenerate pair (%s, %s) with identical variants.", method_a, method_b)
+            continue
         if method_a not in candidate_matrix.index or method_b not in candidate_matrix.index:
             LOGGER.warning(
                 "Pair (%s, %s) skipped because at least one variant is missing from features.",
@@ -259,3 +273,53 @@ def _differences_for_instance(
         rows.append(-diff)
         labels.append(-1)
     return np.vstack(rows) if rows else np.empty((0, len(feature_columns))), labels
+
+
+def _dedupe_candidates_by_variant(candidates: pd.DataFrame) -> pd.DataFrame:
+    """Collapse repeated `method_variant` rows to ensure one candidate per variant.
+
+    Some encoded Pareto artifacts may contain multiple rows per `method_variant` for a given
+    `instance_index` (e.g., repeated runs). Downstream training expects a single feature
+    vector per variant; duplicates can create inconsistent X/y lengths via broadcasting.
+    """
+    if candidates.empty or "method_variant" not in candidates.columns:
+        return candidates
+    method_variant = candidates["method_variant"].astype(str)
+    if method_variant.is_unique:
+        return candidates
+
+    LOGGER.warning(
+        "Found duplicate method_variant rows (n=%s -> %s unique); aggregating duplicates.",
+        int(len(candidates)),
+        int(method_variant.nunique(dropna=False)),
+    )
+    candidates = candidates.copy()
+    candidates["method_variant"] = method_variant
+
+    grouped = candidates.groupby("method_variant", sort=False)
+    numeric_cols = candidates.select_dtypes(include=["number", "bool"]).columns.tolist()
+
+    non_numeric_cols = [col for col in candidates.columns if col not in numeric_cols and col != "method_variant"]
+    numeric_mean_cols = [col for col in numeric_cols if col != "instance_index"]
+
+    parts: list[pd.DataFrame] = []
+    if non_numeric_cols:
+        parts.append(grouped[non_numeric_cols].first())
+    if numeric_mean_cols:
+        parts.append(grouped[numeric_mean_cols].mean())
+    if "instance_index" in candidates.columns:
+        parts.append(grouped[["instance_index"]].first())
+
+    collapsed = pd.concat(parts, axis=1) if parts else pd.DataFrame(index=grouped.size().index)
+    collapsed.insert(0, "method_variant", collapsed.index.astype(str))
+    collapsed = collapsed.reset_index(drop=True)
+
+    desired_order = ["method_variant"] + [col for col in candidates.columns if col != "method_variant"]
+    collapsed = collapsed[[col for col in desired_order if col in collapsed.columns]]
+
+    if "instance_index" in collapsed.columns:
+        collapsed["instance_index"] = pd.to_numeric(collapsed["instance_index"], errors="coerce")
+        if collapsed["instance_index"].notna().all():
+            collapsed["instance_index"] = collapsed["instance_index"].astype(int)
+
+    return collapsed

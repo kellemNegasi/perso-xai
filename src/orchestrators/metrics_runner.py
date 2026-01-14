@@ -612,6 +612,36 @@ def run_experiment(
                     meta.setdefault("hyperparameters", param_override)
                     meta.setdefault("method_variant", method_label)
 
+            # Drop any explanation whose attribution vector contains NaN/inf to avoid propagating
+            # non-finite values into downstream metrics (e.g. confidence/infidelity).
+            if variant_explanations:
+                pruned: List[Dict[str, Any]] = []
+                dropped = 0
+                for explanation in variant_explanations:
+                    attrs = explanation.get("attributions")
+                    if attrs is None:
+                        pruned.append(explanation)
+                        continue
+                    try:
+                        arr = np.asarray(attrs, dtype=float).reshape(-1)
+                    except Exception:
+                        dropped += 1
+                        continue
+                    if arr.size and not np.all(np.isfinite(arr)):
+                        dropped += 1
+                        continue
+                    pruned.append(explanation)
+                if dropped:
+                    LOGGER.warning(
+                        "Dropped %d/%d explanations with non-finite attributions for %s",
+                        dropped,
+                        len(variant_explanations),
+                        method_label,
+                    )
+                variant_explanations = pruned
+                expl_results["explanations"] = variant_explanations
+                expl_results["n_explanations"] = len(variant_explanations)
+
             variant_mapping_local: Dict[int, List[Tuple[int, Dict[str, Any]]]] = {}
             local_to_global: Dict[int, int] = {}
             for local_idx, explanation in enumerate(variant_explanations):
@@ -650,6 +680,41 @@ def run_experiment(
                     method_label=method_label_final,
                     log_progress=log_progress,
                 )
+
+                # Remove any non-finite metric values (NaN/inf) so we don't persist them and so
+                # HPO aggregation isn't poisoned by NaNs.
+                cleaned_batch_metrics: Dict[str, float] = {}
+                for key, value in (batch_metrics or {}).items():
+                    try:
+                        v = float(value)
+                    except (TypeError, ValueError):
+                        continue
+                    if not np.isfinite(v):
+                        continue
+                    cleaned_batch_metrics[str(key)] = v
+                batch_metrics = cleaned_batch_metrics
+
+                cleaned_instance_metrics: Dict[int, Dict[int, Dict[str, float]]] = {}
+                for dataset_idx_int, metrics_by_local in (instance_metrics or {}).items():
+                    cleaned_locals: Dict[int, Dict[str, float]] = {}
+                    for local_idx, metrics_vals in (metrics_by_local or {}).items():
+                        if not isinstance(metrics_vals, dict):
+                            continue
+                        cleaned_vals: Dict[str, float] = {}
+                        for key, value in metrics_vals.items():
+                            try:
+                                v = float(value)
+                            except (TypeError, ValueError):
+                                continue
+                            if not np.isfinite(v):
+                                continue
+                            cleaned_vals[str(key)] = v
+                        if cleaned_vals:
+                            cleaned_locals[int(local_idx)] = cleaned_vals
+                    if cleaned_locals:
+                        cleaned_instance_metrics[int(dataset_idx_int)] = cleaned_locals
+                instance_metrics = cleaned_instance_metrics
+
                 if batch_metrics:
                     combined_batch_metrics.update(batch_metrics)
                     batch_metrics_by_variant[method_label] = batch_metrics

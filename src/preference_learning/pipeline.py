@@ -22,12 +22,17 @@ from .data import (
     PairwisePreferenceData,
     PreferenceDatasetBuilder,
     _differences_for_instance,
+    _dedupe_candidates_by_variant,
     _infer_feature_columns,
 )
 from .evaluation import build_ground_truth_order, evaluate_topk
 from .models import LinearSVCConfig, LinearSVCPreferenceModel
 from .persona import HierarchicalDirichletUser, load_persona_config
 from .ranker import PersonaPairwiseRanker
+from .auto_score_utils import (
+    build_autoxai_hpo_per_instance_scores,
+    load_autoxai_hpo_candidate_scores,
+)
 
 DEFAULT_RESULTS_ROOT = Path("results") / "full_run_dec8"
 DEFAULT_PROCESSED_DIR = DEFAULT_RESULTS_ROOT / "preference_learning"
@@ -165,6 +170,31 @@ def run_persona_linear_svc_simulation(
     pareto_metrics, variant_to_method, pareto_metrics_already_oriented = _load_pareto_metrics_for_encoded(
         encoded_path
     )
+    (
+        hpo_overall_entries,
+        hpo_per_instance_entries,
+        hpo_trial_variant_scores,
+        hpo_metrics_dir_used,
+    ) = load_autoxai_hpo_candidate_scores(
+        encoded_path,
+        dataset_name=str(dataset_name),
+        model_name=str(model_name),
+        default_results_root=DEFAULT_RESULTS_ROOT,
+    )
+    allowed_test_instances = set(int(idx) for idx in test_ids)
+    allowed_test_variants = set(
+        encoded_df.loc[encoded_df["instance_index"].isin(test_ids), "method_variant"].astype(str).tolist()
+    )
+    autoxai_hpo_overall_variant_scores = {
+        variant: float(score)
+        for variant, score in hpo_trial_variant_scores.items()
+        if variant in allowed_test_variants
+    }
+    autoxai_hpo_per_instance_scores = build_autoxai_hpo_per_instance_scores(
+        hpo_per_instance_entries,
+        allowed_instances=allowed_test_instances,
+        allowed_variants=allowed_test_variants,
+    )
     autoxai_objective: list[ObjectiveTerm] = []
     if config.autoxai_enabled:
         # AutoXAI-style baseline objective uses the paper's three metrics.
@@ -194,6 +224,13 @@ def run_persona_linear_svc_simulation(
     per_user_summaries: list[dict] = []
     per_user_topk: list[Dict[str, Dict[str, float]]] = []
     per_user_autoxai_topk: list[Dict[str, Dict[str, float]]] = []
+    per_user_autoxai_hpo_overall_topk: list[Dict[str, Dict[str, float]]] = []
+    per_user_autoxai_hpo_per_instance_topk: list[Dict[str, Dict[str, float]]] = []
+
+    # === USER SIMULATION START ===
+    # We simulate `num_users` independent users by (1) sampling a persona weight vector (seeded by
+    # persona_seed + user_idx) and (2) sampling pairwise preference labels (seeded by label_seed + user_idx).
+    # For each simulated user, we train a separate LinearSVC preference model.
     for user_idx in range(config.num_users):
         user = HierarchicalDirichletUser(
             persona_config,
@@ -210,8 +247,12 @@ def run_persona_linear_svc_simulation(
         train_labels: list[int] = []
         for instance_id in train_ids:
             instance_df = encoded_df.loc[encoded_df["instance_index"] == instance_id].copy()
+            instance_df = _dedupe_candidates_by_variant(instance_df)
             if instance_df.empty:
                 continue
+            # === CANDIDATES LABELED (SIMULATED USER PREFERENCES) ===
+            # Produces a DataFrame of pairwise preferences with label encoding:
+            #   label=0 => pair_1 preferred, label=1 => pair_2 preferred.
             pair_df = ranker.label_instance(
                 dataset_index=int(instance_id),
                 candidates=instance_df,
@@ -224,10 +265,19 @@ def run_persona_linear_svc_simulation(
 
         if not train_rows:
             raise ValueError("Training set is empty after generating persona labels.")
+        if len(train_rows) != len(train_labels):
+            raise ValueError(
+                "Inconsistent training data lengths: "
+                f"features={len(train_rows)} labels={len(train_labels)}. "
+                "This can happen if encoded candidates contain duplicate method_variant rows."
+            )
 
         X_train = pd.DataFrame(train_rows, columns=feature_columns)
         y_train = pd.Series(train_labels, name="label")
 
+        # === MODEL TRAINED (ONE SVM PER SIMULATED USER) ===
+        # The LinearSVC is trained on pairwise difference vectors with balanced labels in {-1, +1}
+        # (see `src/preference_learning/data.py::_differences_for_instance` for the +/- construction).
         model_conf = model_config or LinearSVCConfig(random_state=config.random_state)
         model = LinearSVCPreferenceModel(model_conf)
         svc_tuning = None
@@ -238,11 +288,15 @@ def run_persona_linear_svc_simulation(
 
         per_instance_topk: list[Dict[str, Dict[str, float]]] = []
         per_instance_autoxai_topk: list[Dict[str, Dict[str, float]]] = []
+        per_instance_autoxai_hpo_overall_topk: list[Dict[str, Dict[str, float]]] = []
+        per_instance_autoxai_hpo_per_instance_topk: list[Dict[str, Dict[str, float]]] = []
         instances_evaluated = 0
         for instance_id in test_ids:
             instance_df = encoded_df.loc[encoded_df["instance_index"] == instance_id].copy()
+            instance_df = _dedupe_candidates_by_variant(instance_df)
             if instance_df.empty:
                 continue
+            # === CANDIDATES LABELED (SIMULATED TEST-TIME PREFERENCES) ===
             pair_df = ranker.label_instance(
                 dataset_index=int(instance_id),
                 candidates=instance_df,
@@ -256,10 +310,30 @@ def run_persona_linear_svc_simulation(
                 per_instance_topk.append(topk_metrics)
                 instances_evaluated += 1
 
+            variants_present = set(instance_df["method_variant"].astype(str).tolist())
+            if autoxai_hpo_overall_variant_scores:
+                predicted_overall = {
+                    variant: float(score)
+                    for variant, score in autoxai_hpo_overall_variant_scores.items()
+                    if variant in variants_present
+                }
+                if predicted_overall:
+                    topk = evaluate_topk(predicted_overall, ground_truth, k_values=config.top_k)
+                    if topk:
+                        per_instance_autoxai_hpo_overall_topk.append(topk)
+            if autoxai_hpo_per_instance_scores:
+                instance_scores = autoxai_hpo_per_instance_scores.get(int(instance_id)) or {}
+                predicted_per_instance = {
+                    variant: float(score) for variant, score in instance_scores.items() if variant in variants_present
+                }
+                if predicted_per_instance:
+                    topk = evaluate_topk(predicted_per_instance, ground_truth, k_values=config.top_k)
+                    if topk:
+                        per_instance_autoxai_hpo_per_instance_topk.append(topk)
+
             if config.autoxai_enabled:
                 autoxai_metrics = pareto_metrics.get(int(instance_id))
                 if autoxai_metrics:
-                    variants_present = set(instance_df["method_variant"].astype(str).tolist())
                     instance_candidate_metrics = {
                         variant: metrics
                         for variant, metrics in autoxai_metrics.items()
@@ -289,9 +363,13 @@ def run_persona_linear_svc_simulation(
 
         user_topk_mean = _average_topk(per_instance_topk)
         user_autoxai_topk_mean = _average_topk(per_instance_autoxai_topk) if config.autoxai_enabled else {}
+        user_autoxai_hpo_overall_topk_mean = _average_topk(per_instance_autoxai_hpo_overall_topk)
+        user_autoxai_hpo_per_instance_topk_mean = _average_topk(per_instance_autoxai_hpo_per_instance_topk)
         per_user_topk.append(user_topk_mean)
         if config.autoxai_enabled:
             per_user_autoxai_topk.append(user_autoxai_topk_mean)
+        per_user_autoxai_hpo_overall_topk.append(user_autoxai_hpo_overall_topk_mean)
+        per_user_autoxai_hpo_per_instance_topk.append(user_autoxai_hpo_per_instance_topk_mean)
         per_user_summaries.append(
             {
                 "user_index": user_idx,
@@ -307,11 +385,15 @@ def run_persona_linear_svc_simulation(
                 "svc_top_k_mean": user_topk_mean,
                 "svc_tuning": svc_tuning,
                 "autoxai_top_k_mean": user_autoxai_topk_mean,
+                "autoxai_hpo_overall_top_k_mean": user_autoxai_hpo_overall_topk_mean,
+                "autoxai_hpo_per_instance_top_k_mean": user_autoxai_hpo_per_instance_topk_mean,
             }
         )
 
     aggregate = _average_topk(per_user_topk)
     aggregate_autoxai = _average_topk(per_user_autoxai_topk) if config.autoxai_enabled else {}
+    aggregate_autoxai_hpo_overall = _average_topk(per_user_autoxai_hpo_overall_topk)
+    aggregate_autoxai_hpo_per_instance = _average_topk(per_user_autoxai_hpo_per_instance_topk)
     pareto_path = _default_pareto_path(encoded_path)
     model_conf = model_config or LinearSVCConfig(random_state=config.random_state)
     persona_config_fingerprint: object
@@ -376,6 +458,18 @@ def run_persona_linear_svc_simulation(
         "per_user": per_user_summaries,
         "aggregate_top_k_mean": aggregate,
         "aggregate_autoxai_top_k_mean": aggregate_autoxai,
+        "aggregate_autoxai_hpo_overall_top_k_mean": aggregate_autoxai_hpo_overall,
+        "aggregate_autoxai_hpo_per_instance_top_k_mean": aggregate_autoxai_hpo_per_instance,
+        "autoxai_hpo_source": (
+            {
+                "metrics_results_dir": str(hpo_metrics_dir_used) if hpo_metrics_dir_used is not None else None,
+                "trial_variants": int(len(hpo_trial_variant_scores)),
+                "overall_entries": int(len(hpo_overall_entries)),
+                "per_instance_entries": int(len(hpo_per_instance_entries)),
+            }
+            if (hpo_trial_variant_scores or hpo_overall_entries or hpo_per_instance_entries)
+            else None
+        ),
     }
 
     if output_dir is not None:
@@ -449,7 +543,6 @@ def _default_pareto_path(encoded_path: Path) -> Path:
     return DEFAULT_RESULTS_ROOT / "pareto_fronts" / f"{base}.json"
 
 
-
 def _load_pareto_metrics_for_encoded(
     encoded_path: Path,
 ) -> Tuple[Dict[int, Dict[str, Dict[str, float]]], Dict[str, str], bool]:
@@ -465,7 +558,7 @@ def _load_pareto_metrics_for_encoded(
     # The baseline scorer expects raw per-instance metric dicts keyed by method_variant.
     path = _default_pareto_path(encoded_path)
     if not path.exists():
-        return {}, {}
+        return {}, {}, False
     payload = json.loads(path.read_text(encoding="utf-8"))
     instances = payload.get("instances") or []
     candidate_metrics: Dict[int, Dict[str, Dict[str, float]]] = {}
@@ -547,6 +640,24 @@ def _evaluate_model(
 ) -> dict:
     predictions_dir = experiment_dir / "predictions"
     predictions_dir.mkdir(exist_ok=True)
+    allowed_instances = set(int(idx) for idx in dataset.test_instances)
+    allowed_variants: set[str] = set()
+    for instance in dataset.test_data:
+        allowed_variants.update(instance.candidates["method_variant"].astype(str).tolist())
+    hpo_overall_entries, hpo_per_instance_entries, hpo_trial_variant_scores, _ = load_autoxai_hpo_candidate_scores(
+        dataset.encoded_path,
+        dataset_name=str(dataset.dataset_name),
+        model_name=str(dataset.model_name),
+        default_results_root=DEFAULT_RESULTS_ROOT,
+    )
+    autoxai_hpo_overall_variant_scores = {
+        variant: float(score) for variant, score in hpo_trial_variant_scores.items() if variant in allowed_variants
+    }
+    autoxai_hpo_per_instance_scores = build_autoxai_hpo_per_instance_scores(
+        hpo_per_instance_entries,
+        allowed_instances=allowed_instances,
+        allowed_variants=allowed_variants,
+    )
     metrics: dict = {}
     for instance in dataset.test_data:
         scores = model.score_candidates(instance.candidates, feature_columns)
@@ -565,8 +676,27 @@ def _evaluate_model(
             ground_truth,
             k_values=top_k,
         )
+        autoxai_hpo_overall_topk: Dict[str, Dict[str, float]] = {}
+        autoxai_hpo_per_instance_topk: Dict[str, Dict[str, float]] = {}
+        if ground_truth:
+            variants_present = set(instance.candidates["method_variant"].astype(str).tolist())
+            if autoxai_hpo_overall_variant_scores:
+                predicted_overall = {
+                    variant: float(score)
+                    for variant, score in autoxai_hpo_overall_variant_scores.items()
+                    if variant in variants_present
+                }
+                autoxai_hpo_overall_topk = evaluate_topk(predicted_overall, ground_truth, k_values=top_k)
+            if autoxai_hpo_per_instance_scores:
+                instance_scores = autoxai_hpo_per_instance_scores.get(int(instance.instance_index)) or {}
+                predicted_per_instance = {
+                    variant: float(score) for variant, score in instance_scores.items() if variant in variants_present
+                }
+                autoxai_hpo_per_instance_topk = evaluate_topk(predicted_per_instance, ground_truth, k_values=top_k)
         metrics[str(instance.instance_index)] = {
             "ground_truth": ground_truth,
             "top_k": metric,
+            "autoxai_hpo_overall_top_k": autoxai_hpo_overall_topk,
+            "autoxai_hpo_per_instance_top_k": autoxai_hpo_per_instance_topk,
         }
     return metrics

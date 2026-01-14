@@ -11,10 +11,10 @@ set -euo pipefail
 #   METRIC_VALUE_TRANSFORM (default: signed_log1p)
 #   TRANSFORM_COUNT_METRICS (default: 1; set 0 to disable)
 
-RESULTS_ROOT=${RESULTS_ROOT:-results/hc_combo_20251228_050331}
-PARETO_DIR=${1:-${PARETO_DIR:-$RESULTS_ROOT/pareto_fronts}}
+RESULTS_ROOT=${RESULTS_ROOT:-results/hc_combo_20260110_024805}
+PARETO_DIR=${1:-${PARETO_DIR:-$RESULTS_ROOT/pareto_fronts_new}}
 METADATA_DIR=${2:-${METADATA_DIR:-$RESULTS_ROOT/metadata}}
-ENCODED_DIR=${3:-${ENCODED_DIR:-$RESULTS_ROOT/encoded_pareto_fronts/features_full_lm_stats}}
+ENCODED_DIR=${3:-${ENCODED_DIR:-$RESULTS_ROOT/encoded_pareto_fronts_new/features_full_lm_stats}}
 
 PYTHON_BIN=${PYTHON_BIN:-python3}
 METRIC_VALUE_TRANSFORM=${METRIC_VALUE_TRANSFORM:-signed_log1p}

@@ -66,7 +66,6 @@ autoxai_lime:
         random_state: 42
         lime_num_samples: 1000
         lime_noise_scale: 0.1
-        lime_kernel_width: 2.0
 
 integrated_gradients:
   <<: *tabular_explainer

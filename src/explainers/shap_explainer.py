@@ -9,6 +9,7 @@ import logging
 import time
 import numpy as np
 from typing import Any, Dict, List, Optional
+import warnings
 
 from .base import BaseExplainer, InstanceLike, ArrayLike
 
@@ -188,16 +189,25 @@ class SHAPExplainer(BaseExplainer):
             raise RuntimeError("SHAP explainer not initialized; call fit() first.")
 
         kwargs: Dict[str, Any] = {}
+        n_features = int(np.asarray(X).shape[1]) if np.asarray(X).ndim >= 2 else 0
+        nsamples_int: Optional[int] = None
         nsamples = self._expl_cfg.get("shap_nsamples")
         if nsamples is not None:
             if self._explainer_type in {"kernel", "sampling"}:
-                kwargs["nsamples"] = int(nsamples)
+                nsamples_int = int(nsamples)
+                kwargs["nsamples"] = nsamples_int
             else:
                 self.logger.debug(
                     "Ignoring experiment.explanation.shap_nsamples=%r because explainer_type=%r.",
                     nsamples,
                     self._explainer_type,
                 )
+
+        def _safe_num_features_reg(*, limit_by_nsamples: bool) -> str:
+            k_value = max(1, min(10, max(1, n_features)))
+            if limit_by_nsamples and nsamples_int is not None:
+                k_value = min(k_value, max(1, nsamples_int - 1))
+            return f"num_features({k_value})"
 
         l1_reg = self._expl_cfg.get("shap_l1_reg")
         if l1_reg is not None:
@@ -206,9 +216,21 @@ class SHAPExplainer(BaseExplainer):
                     token = l1_reg.strip()
                     lowered = token.lower()
                     if lowered in {"auto", "aic", "bic"}:
-                        kwargs["l1_reg"] = lowered
+                        # These modes can invoke sklearn's LassoLarsIC path and blow up when
+                        # the effective regression system is underdetermined (nsamples <= n_features).
+                        if nsamples_int is not None and nsamples_int <= max(1, n_features):
+                            safe = _safe_num_features_reg(limit_by_nsamples=True)
+                            self.logger.info(
+                                "Overriding shap_l1_reg=%r -> %r because nsamples=%s <= n_features=%s (avoids singular KernelSHAP regression).",
+                                lowered,
+                                safe,
+                                nsamples_int,
+                                n_features,
+                            )
+                            kwargs["l1_reg"] = safe
+                        else:
+                            kwargs["l1_reg"] = lowered
                     elif lowered == "num_features":
-                        n_features = int(np.asarray(X).shape[1])
                         k_raw = self._expl_cfg.get("shap_l1_reg_k")
                         if k_raw is None:
                             rng = np.random.default_rng(self.random_state)
@@ -216,6 +238,8 @@ class SHAPExplainer(BaseExplainer):
                         else:
                             k_value = int(k_raw)
                         k_value = max(1, min(k_value, max(1, n_features)))
+                        if nsamples_int is not None:
+                            k_value = min(k_value, max(1, nsamples_int - 1))
                         kwargs["l1_reg"] = f"num_features({k_value})"
                     else:
                         # Pass through, e.g. "num_features(10)" or any SHAP-supported string.
@@ -237,7 +261,41 @@ class SHAPExplainer(BaseExplainer):
                 return self._explainer.shap_values(X, **call_kwargs)
 
         try:
-            return _call_shap_values(kwargs)
+            with warnings.catch_warnings(record=True) as captured:
+                warnings.simplefilter("always")
+                out = _call_shap_values(kwargs)
+
+            if self._explainer_type == "kernel" and captured:
+                try:
+                    from sklearn.exceptions import ConvergenceWarning  # type: ignore
+                except Exception:  # pragma: no cover
+                    ConvergenceWarning = Warning  # type: ignore[misc,assignment]
+
+                saw_singular = False
+                for w in captured:
+                    msg = str(getattr(w, "message", ""))
+                    cat = getattr(w, "category", None)
+                    if "Linear regression equation is singular" in msg:
+                        saw_singular = True
+                        break
+                    if cat is not None and issubclass(cat, ConvergenceWarning):
+                        if "Regressors in active set degenerate" in msg:
+                            saw_singular = True
+                            break
+
+                if saw_singular:
+                    safe = _safe_num_features_reg(limit_by_nsamples=True)
+                    if kwargs.get("l1_reg") != safe:
+                        retry_kwargs = dict(kwargs)
+                        retry_kwargs["l1_reg"] = safe
+                        self.logger.warning(
+                            "KernelSHAP emitted singular/degenerate regression warnings; retrying with l1_reg=%r.",
+                            safe,
+                        )
+                        with warnings.catch_warnings():
+                            warnings.simplefilter("ignore")
+                            return _call_shap_values(retry_kwargs)
+            return out
         except ValueError as e:
             # KernelExplainer's default/auto regularization can use LassoLarsIC ("aic"/"bic"),
             # which fails when the regression sample count is < number of features.
@@ -250,10 +308,8 @@ class SHAPExplainer(BaseExplainer):
                     or "samples is smaller than the number of features" in msg
                 )
             ):
-                n_features = int(np.asarray(X).shape[1])
-                k_value = max(1, min(10, n_features))
                 fallback_kwargs = dict(kwargs)
-                fallback_kwargs["l1_reg"] = f"num_features({k_value})"
+                fallback_kwargs["l1_reg"] = _safe_num_features_reg(limit_by_nsamples=True)
                 self.logger.warning(
                     "KernelSHAP failed with LassoLarsIC (likely nsamples < n_features); retrying with l1_reg=%r.",
                     fallback_kwargs["l1_reg"],

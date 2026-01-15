@@ -18,7 +18,7 @@ set -euo pipefail
 
 RUN_ID="${1:-hc_combo_$(date +%Y%m%d_%H%M%S)}"
 # RUN_ID="hc_combo_20260110_024805_testing"  # fixed for testing
-RUN_ID="hc_combo_20260114_132532"  # fixed for testing
+# RUN_ID="hc_combo_20260114_132532"  # fixed for testing
 if [[ -z "${VIRTUAL_ENV:-}" ]]; then
   if [[ -f ".venv/bin/activate" ]]; then
     # shellcheck disable=SC1091
@@ -46,10 +46,10 @@ if [[ -n "${MODELS:-}" ]]; then
   read -r -a MODELS_ARR <<<"${MODELS}"
 else
   MODELS_ARR=(
-    # decision_tree
+    decision_tree
     # random_forest
-    # mlp_classifier
-    # gradient_boosting
+    mlp_classifier
+    gradient_boosting
     logistic_regression
     # svm_rbf
   )

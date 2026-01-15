@@ -10,7 +10,7 @@ set -euo pipefail
 # - target_path: optional dataset/model path to limit processing.
 #                When omitted, every dataset/model under metrics_dir is processed.
 
-RESULTS_ROOT=${RESULTS_ROOT:-results/hc_combo_20260110_024805}
+RESULTS_ROOT=${RESULTS_ROOT:-results/hc_combo_20260114_132532}
 METRICS_DIR=${1:-${RESULTS_ROOT}/metrics_results}
 OUTPUT_DIR=${2:-${RESULTS_ROOT}/pareto_fronts_new}
 TARGET_PATH=${3:-}

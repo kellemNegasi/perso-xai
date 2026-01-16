@@ -13,15 +13,15 @@ def test_ranker_uses_tau_and_weights() -> None:
             "persona": "unit_test",
             "type": "hierarchical_dirichlet",
             "tau": 0.05,
-            "groups": {
+            "properties": {
                 "g": {
-                    "alpha": 1,
-                    "metrics": {"m1": 1, "m2": 1},
-                }
+                    "preference": 1,
+                    "metrics": ["m1", "m2"],
+                },
             },
         }
     )
-    user = HierarchicalDirichletUser(cfg, seed=0)
+    user = HierarchicalDirichletUser(cfg, seed=0, concentration_c=1.0)
     # Force deterministic weights: m1 dominates.
     user.metric_weights = {"m1": 1.0, "m2": 0.0}
     user._weight_vector = None

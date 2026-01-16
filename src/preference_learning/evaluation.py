@@ -79,11 +79,19 @@ def evaluate_topk(
     """Evaluate overlap between predicted and ground-truth top-k rankings."""
     if not ground_truth_order:
         return {}
-    sorted_pred = sorted(
-        predicted_scores.items(),
-        key=lambda item: item[1],
-        reverse=True,
-    )
+    def _score_sort_key(item: tuple[object, object]) -> tuple[float, str]:
+        variant, score = item
+        variant_key = str(variant)
+        try:
+            score_val = float(score)  # type: ignore[arg-type]
+        except Exception:
+            score_val = float("-inf")
+        if np.isnan(score_val):
+            score_val = float("-inf")
+        # Sort by score descending, then by method_variant for deterministic tie-breaking.
+        return (-score_val, variant_key)
+
+    sorted_pred = sorted(predicted_scores.items(), key=_score_sort_key)
     pred_order = [variant for variant, _ in sorted_pred]
     metrics: Dict[str, Dict[str, float]] = {}
     rank_map_pred = {variant: idx for idx, variant in enumerate(pred_order)}

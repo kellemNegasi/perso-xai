@@ -12,6 +12,10 @@ utility model:
 The weights w are sampled once per run from a flat Dirichlet persona
 configuration under `src/preference_learning/configs/`, then reused to label
 every pair in the dataset.
+
+This script is intended for standalone/offline workflows where you want to
+persist pairwise rankings to disk (as `*_pair_labels.parquet`) and reuse them
+later (e.g., for running preference-learning over fixed labels).
 """
 
 from __future__ import annotations

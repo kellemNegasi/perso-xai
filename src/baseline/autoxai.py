@@ -1,3 +1,14 @@
+"""
+CLI entry point for the AutoXAI-style baseline.
+
+This module can be used standalone to rank explainer variants from cached metric artifacts
+(`metrics_results/`) and emit a JSON report.
+
+It is also used by the preference-learning simulation: the simulation pipeline
+computes an AutoXAI baseline score for candidates via `src.baseline.autoxai_scoring.compute_scores`
+(see `src/preference_learning/pipeline.py`).
+"""
+
 from __future__ import annotations
 
 import argparse
@@ -206,4 +217,3 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

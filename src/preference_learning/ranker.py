@@ -85,6 +85,8 @@ class PersonaPairwiseRanker:
         delta = z[idx_a] - z[idx_b]
         logits = (delta @ w) / self.user.tau
         p = _sigmoid(logits)
+        # Sample pairwise outcomes with P(pair_1 wins) = p using inverse-CDF sampling:
+        # if u ~ Uniform(0,1), then P(u < p) = p, so `u < p` selects pair_1 with probability p.
         a_preferred = self.rng.random(size=p.shape[0]) < p
         labels = np.where(a_preferred, 0, 1).astype(int)
 
@@ -99,4 +101,3 @@ class PersonaPairwiseRanker:
                 }
             )
         return pd.DataFrame(rows, columns=(self.columns.dataset_index, self.columns.pair_1, self.columns.pair_2, self.columns.label))
-

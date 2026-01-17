@@ -236,6 +236,19 @@ def _differences_for_instance(
     pair_df: pd.DataFrame,
     feature_columns: Sequence[str],
 ) -> Tuple[np.ndarray, List[int]]:
+    """
+    Convert pairwise preference labels into signed difference vectors.
+
+    Note on label encoding:
+    - In `pair_df`, labels are expected to be {0, 1} where:
+        - label=0 => `pair_1` is preferred
+        - label=1 => `pair_2` is preferred
+      This {0,1} encoding is only used to indicate *which item won* in the pair.
+    - For downstream learning, we train on signed difference vectors and labels in {-1, +1}:
+        - x = features(preferred) - features(other) with y = +1
+        - and the symmetric example -x with y = -1
+      This makes the training representation invariant to the arbitrary ordering of (pair_1, pair_2).
+    """
     instance_df = _dedupe_candidates_by_variant(instance_df)
     candidate_matrix = instance_df.set_index("method_variant")[list(feature_columns)].astype(float)
     if not candidate_matrix.index.is_unique:

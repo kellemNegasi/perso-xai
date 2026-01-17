@@ -46,10 +46,10 @@ if [[ -n "${MODELS:-}" ]]; then
   read -r -a MODELS_ARR <<<"${MODELS}"
 else
   MODELS_ARR=(
-    # decision_tree
+    decision_tree
     # random_forest
-    # mlp_classifier
-    # gradient_boosting
+    mlp_classifier
+    gradient_boosting
     logistic_regression
     # svm_rbf
   )

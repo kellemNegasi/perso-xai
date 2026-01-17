@@ -217,8 +217,27 @@ def run_persona_linear_svc_simulation(
                 for metric_blob in variants.values():
                     all_metric_keys.update(metric_blob.keys())
             remaining = sorted(key for key in all_metric_keys if key not in existing_keys)
+            boosted_weight_keys = {
+                # Deletion-check completeness metrics.
+                "completeness_drop",
+                "completeness_random_drop",
+                "completeness_score",
+                # Non-sensitivity metrics.
+                "non_sensitivity_violation_fraction",
+                "non_sensitivity_safe_fraction",
+                "non_sensitivity_zero_features",
+                "non_sensitivity_delta_mean",
+                # Monotonicity metric.
+                "monotonicity",
+            }
             autoxai_objective.extend(
-                ObjectiveTerm(name=key, metric_key=key, direction="max", weight=1.0) for key in remaining
+                ObjectiveTerm(
+                    name=key,
+                    metric_key=key,
+                    direction="max",
+                    weight=2.0 if key in boosted_weight_keys else 0.3,
+                )
+                for key in remaining
             )
 
     per_user_summaries: list[dict] = []

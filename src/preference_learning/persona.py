@@ -214,8 +214,13 @@ def _lookup_concentration_c(payload: Mapping[str, object] | None, persona: str) 
     return float(max(float(value), MIN_DIRICHLET_CONCENTRATION))
 
 
+# TODO: Rename to `FlatDirichletUser` (and keep a backwards-compatible alias) once the
+# public API can change. The current name is legacy from an earlier hierarchical variant.
 class HierarchicalDirichletUser:
     """
+    Note: despite the class name, this implementation is *flat* (a single Dirichlet over all
+    metrics). The "Hierarchical" prefix is legacy from an earlier hierarchical implementation.
+
     Flat persona that samples a single Dirichlet over metrics and then stays fixed.
 
     Weight sampling

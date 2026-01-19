@@ -34,5 +34,11 @@ experiment_results/*
 .env
 # *.json
 *.joblib
-# keep all JSON files anywhere under saved_models/
-results/
+# Saved model tuning outputs (ignore JSON; keep folders via .gitkeep)
+saved_models/tuning_results/**/*.json
+!saved_models/.gitkeep
+!saved_models/tuning_results/.gitkeep
+
+# Local run outputs (keep folder via .gitkeep)
+results/**
+!results/.gitkeep

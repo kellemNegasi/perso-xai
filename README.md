@@ -2,6 +2,8 @@
 
 PersoXAI is a framework for generating, evaluating, and personalizing explanations of model predictions. It surfaces multiple explanation methods for each instance, lets people pick the ones they find most useful, and ultimately aims to learn a latent explanation ranker that can proactively recommend explanations aligned with each individual’s preferences.
 
+![PersoXAI overview diagram](diagrams/PersoXAIOverview_white.png)
+
 ## Project Overview
 
 1. Train or load a predictive model and run a suite of explainers on tabular datasets.  
